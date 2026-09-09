@@ -1,0 +1,6 @@
+exports_files(["requirements_lock_3_11.txt"])
+
+# No `compile_pip_requirements` target on purpose: the lock is copied from the
+# `hash_frx` commit `MODULE.bazel` pins rather than compiled from
+# `requirements.in`, so that both modules resolve ONE frx and one zk_dtypes into
+# a runfiles tree. `requirements.in` carries the full reason.

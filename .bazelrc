@@ -1,0 +1,17 @@
+# bazel 9 defaults to bzlmod (WORKSPACE is gone), so no enable flags needed.
+build --announce_rc
+test --test_output=errors
+
+# The suite is a harness test suite, not a measurement: it asserts that rows are
+# produced, classified and modelled correctly, on whatever backend is present.
+# CPU keeps it deterministic on any machine; the sweep itself picks its backend
+# from `--backend`, never from here.
+test --test_env=FRX_PLATFORMS=cpu
+
+# Never let Bazel synthesize an `__init__.py` into a runfiles tree (it can write
+# an empty one back through a source symlink; `hash_frx`'s .bazelrc carries the
+# full account).
+build --incompatible_default_to_explicit_init_py
+
+# Local, machine-specific overrides (gitignored).
+try-import %workspace%/.bazelrc.user

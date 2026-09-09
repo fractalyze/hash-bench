@@ -1,0 +1,44 @@
+"""hash-bench — the hash benchmark harness.
+
+bzlmod module. The two things being measured arrive as pinned dependencies
+rather than as whatever happens to be installed: `hash_frx` as a bzlmod module
+at a commit, and the frx wheels (which carry the Fractalyze XLA plugin) from
+the lock. A row records both, so a table is reproducible from the row alone.
+
+The frx pins here must equal `hash_frx`'s own, not merely satisfy its floor: a
+bzlmod consumer resolves each module's pip dependencies from its own lock, and
+only equal versions keep ONE frx and ONE zk_dtypes on a test's `sys.path`.
+Bumping the `git_override` commit therefore means copying that commit's
+`requirements_lock_3_11.txt` over this one.
+"""
+
+module(
+    name = "hash_bench",
+    version = "0.0.0",
+)
+
+bazel_dep(name = "platforms", version = "1.0.0")
+bazel_dep(name = "rules_python", version = "1.5.1")
+bazel_dep(name = "hash_frx", version = "0.0.0")
+git_override(
+    module_name = "hash_frx",
+    commit = "7313e13079afbf585a232e22986d184f8f5e89eb",
+    remote = "https://github.com/fractalyze/hash-frx.git",
+)
+
+python = use_extension("@rules_python//python/extensions:python.bzl", "python")
+python.toolchain(
+    is_default = True,
+    python_version = "3.11",
+)
+
+pip = use_extension("@rules_python//python/extensions:pip.bzl", "pip")
+pip.parse(
+    # frx / frxlib / frx-cuda12-pjrt / frx-cuda12-plugin are published on the
+    # Fractalyze index.
+    extra_pip_args = ["--extra-index-url=https://fractalyze.github.io/pypi/simple/"],
+    hub_name = "hash_bench_pip",
+    python_version = "3.11",
+    requirements_lock = "//:requirements_lock_3_11.txt",
+)
+use_repo(pip, "hash_bench_pip")
