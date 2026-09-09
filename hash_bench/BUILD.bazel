@@ -3,9 +3,9 @@ load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 
 # The GPU runtime plugins. Carried by the sweep binary and by the tests that
 # compile a module, because the `gpu` leg initializes the device; inert on the
-# CPU legs. Not attached reflexively — they are hundreds of megabytes of
-# runfiles (hash_frx's `defs.bzl` measures it), so a target that only reads
-# strings does without.
+# CPU legs. Not attached reflexively — they dominate the runfiles of anything
+# that carries them (hash_frx's `defs.bzl` measures it), so a target that only
+# reads strings does without.
 GPU_PLUGIN_DEPS = [
     requirement("frx_cuda12_plugin"),
     requirement("frx_cuda12_pjrt"),
@@ -31,6 +31,9 @@ py_library(
         "roofline.py",
         "timing.py",
     ],
+    # Read at runtime for the hash-frx commit this workspace pins; see the root
+    # BUILD file.
+    data = ["//:MODULE.bazel"],
     visibility = ["//visibility:public"],
     deps = [
         ":schema",

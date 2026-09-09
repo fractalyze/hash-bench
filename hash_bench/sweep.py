@@ -9,6 +9,11 @@ WORKER per (backend leg, arm), each started with the environment that pair needs
 and collects the rows they emit. Running the matrix in one process would
 silently measure the first combination's flags for all of them.
 
+Each leg runs one extra worker first, which measures that leg's roofline
+ceilings and prints them. Every arm worker on the leg is then handed the same
+ceilings, so a leg's three arms are fractions of one denominator rather than of
+three separately-noisy ones.
+
     bazel run //hash_bench:sweep -- --out results/$(hostname).jsonl
 
 Narrow it with `--hash`, `--batch`, `--backend` and `--arm`; each is repeatable
@@ -74,8 +79,10 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--quiet", action="store_true", help="do not render the summary table on stderr"
     )
-    # The orchestrator sets this on the children it spawns.
+    # The orchestrator sets these on the children it spawns.
     p.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
+    p.add_argument("--probe-peaks", action="store_true", help=argparse.SUPPRESS)
+    p.add_argument("--peaks", default="", help=argparse.SUPPRESS)
     return p
 
 
@@ -93,7 +100,9 @@ def _worker_env(leg: backends.Leg, arm: arms.Arm) -> dict[str, str]:
     return env
 
 
-def _worker_argv(args: argparse.Namespace, leg: str, arm: str) -> list[str]:
+def _worker_argv(
+    args: argparse.Namespace, leg: str, arm: str, peaks: str = ""
+) -> list[str]:
     argv = [
         sys.executable,
         "-m",
@@ -114,6 +123,8 @@ def _worker_argv(args: argparse.Namespace, leg: str, arm: str) -> list[str]:
         argv += ["--hash", name]
     for batch in args.batch:
         argv += ["--batch", str(batch)]
+    if peaks:
+        argv += ["--peaks", peaks]
     return argv
 
 
@@ -122,10 +133,11 @@ def _run_worker(
 ) -> tuple[list[dict[str, Any]], int]:
     """Run one worker to exit, returning its rows and its exit status.
 
-    Rows are forwarded as they arrive rather than after the worker exits: a leg
-    can spend minutes on one row (a declined region compiles the whole round
-    schedule), and a run that shows nothing until then looks hung. The worker's
-    stderr is inherited, so its warnings arrive live too.
+    Rows are forwarded as they arrive rather than after the worker exits: one row
+    can outlast the whole rest of its leg (a declined region hands the backend
+    the entire round schedule to compile), and a run that shows nothing until
+    the worker exits looks hung. The worker's stderr is inherited, so its
+    warnings arrive live too.
     """
     rows: list[dict[str, Any]] = []
     proc = subprocess.Popen(argv, env=env, stdout=subprocess.PIPE, text=True)
@@ -145,6 +157,20 @@ def _run_worker(
     return rows, proc.wait()
 
 
+def _probe_peaks(args: argparse.Namespace, leg: backends.Leg) -> str:
+    """Measure one leg's ceilings, returning them as the JSON its arm workers
+    take. Run under the `routed` arm because the probes carry no hash marker for
+    an arm to change; what matters is that all three arms then divide by this
+    one measurement rather than by three of their own."""
+    argv = _worker_argv(args, leg.name, arms.Arm.ROUTED.value) + ["--probe-peaks"]
+    out = subprocess.run(
+        argv, env=_worker_env(leg, arms.Arm.ROUTED), stdout=subprocess.PIPE, text=True
+    )
+    if out.returncode != 0:
+        raise SystemExit(f"[{leg.name}] roofline probe failed")
+    return out.stdout.strip()
+
+
 def orchestrate(args: argparse.Namespace) -> int:
     legs = args.backend or backends.available()
     requested_arms = [arms.Arm(a) for a in (args.arm or [a.value for a in arms.Arm])]
@@ -155,9 +181,10 @@ def orchestrate(args: argparse.Namespace) -> int:
     try:
         for leg_name in legs:
             leg = backends.get(leg_name)
+            peaks = _probe_peaks(args, leg)
             for arm in requested_arms:
                 worker_rows, status = _run_worker(
-                    _worker_argv(args, leg_name, arm.value),
+                    _worker_argv(args, leg_name, arm.value, peaks),
                     _worker_env(leg, arm),
                     out,
                 )
@@ -184,8 +211,7 @@ def _row(
     measurement: timing.Measurement,
     observed: arms.Lowering,
     callees: tuple[str, ...],
-    memory: roofline.MemoryPeak,
-    method: timing.Method,
+    peaks: roofline.Peaks,
     machine_record: dict[str, Any],
 ) -> results.Row:
     seconds = measurement.ns_per_call * 1e-9
@@ -202,7 +228,16 @@ def _row(
         ops_per_s = call.ops.count * hashes_per_s
         ops_unit = call.ops.unit
         ops_note = call.ops.note
-        arith = roofline.arith_peak(call.x.dtype, call.ops.unit, method)
+        arith = peaks.arith_for(call.ops_dtype, call.ops.unit)
+        if arith is None:
+            # The leg's probe measures exactly the units its rows declare, so a
+            # miss is a wiring bug. Falling through would print
+            # "no arithmetic model declared for this hash" over a row that
+            # declares one — a row lying about why it has one ceiling.
+            raise SystemExit(
+                f"{spec.name}: no {call.ops.unit} ceiling in {call.ops_dtype} was "
+                "probed for this leg"
+            )
     return results.Row(
         hash=spec.name,
         batch=batch,
@@ -221,7 +256,7 @@ def _row(
         ops_per_s=ops_per_s,
         ops_unit=ops_unit,
         ops_note=ops_note,
-        roofline=roofline.fractions(bytes_per_s, ops_per_s, memory, arith),
+        roofline=roofline.fractions(bytes_per_s, ops_per_s, peaks.memory, arith),
         method=dict(
             dataclasses.asdict(measurement.method),
             observation=(
@@ -249,10 +284,18 @@ def work(args: argparse.Namespace) -> int:
     method = timing.Method(
         warmup=args.warmup, reps=args.reps, target_rep_ns=args.target_rep_ns
     )
+    specs = list(registry.rows(tuple(args.hash)))
+    if args.probe_peaks:
+        units = [c for c in (spec.arith_ceiling() for spec in specs) if c is not None]
+        print(json.dumps(roofline.measure_peaks(units, method).to_json()))
+        return 0
+
+    if not args.peaks:
+        raise SystemExit("--worker needs --peaks; the orchestrator probes per leg")
+    peaks = roofline.Peaks.from_json(json.loads(args.peaks))
     machine_record = machine.describe()
-    memory = roofline.memory_peak(method)
     batches = args.batch or DEFAULT_BATCHES
-    for spec in registry.rows(tuple(args.hash)):
+    for spec in specs:
         for batch in batches:
             call = spec.call(batch)
             started = time.perf_counter_ns()
@@ -270,8 +313,7 @@ def work(args: argparse.Namespace) -> int:
                 measurement=measurement,
                 observed=observed,
                 callees=callees,
-                memory=memory,
-                method=method,
+                peaks=peaks,
                 machine_record=machine_record,
             )
             results.write(row, sys.stdout)

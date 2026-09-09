@@ -1,4 +1,11 @@
-exports_files(["requirements_lock_3_11.txt"])
+# `MODULE.bazel` is a runfile of the harness, not only a build input: a
+# `git_override`-fetched module has no `.git`, so the commit the workspace pins
+# survives into a run only by being read back out of this file
+# (`machine._pinned_hash_frx_commit`).
+exports_files([
+    "MODULE.bazel",
+    "requirements_lock_3_11.txt",
+])
 
 # No `compile_pip_requirements` target on purpose: the lock is copied from the
 # `hash_frx` commit `MODULE.bazel` pins rather than compiled from

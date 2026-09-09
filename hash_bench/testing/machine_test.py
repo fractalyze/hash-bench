@@ -33,8 +33,43 @@ class GitShaTest(absltest.TestCase):
         link.symlink_to(elsewhere)
         self.assertEqual(machine._git_sha(link), expected)
 
+    def test_a_repo_that_only_encloses_the_path_reports_no_sha(self) -> None:
+        # The shape a Bazel runfiles tree has: the dependency's files sit under
+        # the CONSUMER's gitignored output directory. Asking git about the path
+        # returns the consumer's commit, which would be recorded as the
+        # dependency's — a row naming the wrong revision, worse than naming none.
+        repo = Path(self.create_tempdir("consumer").full_path)
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        (repo / ".gitignore").write_text("bazel-out/\n")
+        (repo / "own.py").write_text("")
+        for args in (
+            ["add", ".gitignore", "own.py"],
+            ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "one"],
+        ):
+            subprocess.run(["git", "-C", str(repo), *args], check=True)
+        enclosed = repo / "bazel-out" / "dependency"
+        enclosed.mkdir(parents=True)
+        (enclosed / "mod.py").write_text("")
+
+        self.assertIsNotNone(machine._git_sha(repo))
+        self.assertIsNone(machine._git_sha(enclosed))
+
     def test_a_path_in_no_checkout_reports_no_sha(self) -> None:
         self.assertIsNone(machine._git_sha(Path(self.create_tempdir().full_path)))
+
+
+class PinTest(absltest.TestCase):
+    def test_the_pinned_hash_frx_commit_is_readable(self) -> None:
+        # A `git_override`-fetched module has no `.git`, so this file is the
+        # only place the pinned commit survives into a run. It is attached as a
+        # runfile for exactly this read; losing that attachment makes every row
+        # stop identifying which hash-frx it measured.
+        commit = machine._pinned_hash_frx_commit()
+        self.assertIsNotNone(commit)
+        self.assertRegex(commit, r"^[0-9a-f]{7,40}$")
+
+    def test_revisions_carry_the_pin(self) -> None:
+        self.assertIsNotNone(machine.revisions()["hash-frx-pin"])
 
 
 if __name__ == "__main__":

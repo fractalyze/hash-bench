@@ -15,7 +15,7 @@ import sys
 
 from absl.testing import absltest, parameterized
 
-from hash_bench import arms, registry, results
+from hash_bench import arms, registry, results, sweep
 
 # The shortest settings that still produce a row: one warmup, one rep, and a rep
 # target low enough that calibration stops at a handful of calls.
@@ -61,6 +61,9 @@ class DriverTest(absltest.TestCase):
         # one is not comparable to this one however alike the machines are.
         self.assertIsNotNone(revisions["frx"])
         self.assertIsNotNone(revisions["hash-frx-version"])
+        # Which hash-frx ran. A `git_override`-fetched module has no `.git`, so
+        # without the pin a row would name no hash-frx commit at all.
+        self.assertIsNotNone(revisions["hash-frx-pin"])
         self.assertEqual(row["schema"], results.SCHEMA_VERSION)
         self.assertGreater(row["ns_per_hash"], 0.0)
         self.assertGreater(row["roofline"]["memory_fraction"], 0.0)
@@ -70,11 +73,47 @@ class DriverTest(absltest.TestCase):
         emitted = _sweep("--hash", "sha256", "--batch", "4", "--out", path)
         self.assertEqual(results.read(path), emitted)
 
+    def test_one_leg_reports_one_set_of_ceilings(self) -> None:
+        # A share and the total it is a share of have to come from one
+        # measurement, or the leg's arms stop being comparable to each other.
+        rows = _sweep("--hash", "poseidon2-koalabear16", "--batch", "4")
+        self.assertLen(rows, len(arms.Arm))
+        self.assertLen({r["roofline"]["peak_bytes_per_s"] for r in rows}, 1)
+        self.assertLen({r["roofline"]["peak_ops_per_s"] for r in rows}, 1)
+
     def test_the_worker_runs_under_the_arm_it_was_given(self) -> None:
         (row,) = _sweep("--hash", "sha256", "--batch", "4", "--arm", "declined")
         flags = row["machine"]["env"]["XLA_FLAGS"]
         for pass_name in (*arms.RECOGNIZER_PASSES, arms.LOOP_CONVERSION_PASS):
             self.assertIn(pass_name, flags)
+
+
+class CeilingTest(absltest.TestCase):
+    def test_a_declared_model_never_reports_as_undeclared(self) -> None:
+        # A row whose ceiling the leg did not probe must fail, not fall through
+        # to the "no arithmetic model declared" wording over a row that declares
+        # one.
+        from hash_bench import registry, roofline, timing
+
+        (spec,) = registry.rows(("poseidon2-koalabear16",))
+        call = spec.call(2)
+        empty = roofline.Peaks(
+            memory=roofline.MemoryPeak(bytes_per_s=1.0, probe="a probe")
+        )
+        with self.assertRaisesRegex(SystemExit, "field_mul"):
+            sweep._row(
+                spec=spec,
+                batch=2,
+                leg_name="cpu",
+                arm=arms.Arm.ROUTED,
+                call=call,
+                compile_ns=1,
+                measurement=timing.Measurement(1.0, 1.0, 0.0, timing.Method()),
+                observed=arms.Lowering.DEDICATED,
+                callees=("poseidon2",),
+                peaks=empty,
+                machine_record={},
+            )
 
 
 class DeclineTest(parameterized.TestCase):
@@ -93,9 +132,11 @@ class DeclineTest(parameterized.TestCase):
 class RoutedTest(parameterized.TestCase):
     @parameterized.named_parameters(*[(n, n) for n in registry.names()])
     def test_every_row_routes_on_the_cpu_leg_of_this_pin(self, name: str) -> None:
-        # The CPU leg carries a dedicated emitter for all of them today. A row
-        # that stops routing here has lost its kernel silently — right bytes, no
-        # kernel — which is the failure the whole harness is built around.
+        # Every row is expected to reach a dedicated emitter on the CPU leg, so
+        # one that stops routing has lost its kernel silently — right bytes, no
+        # kernel — which is the failure the whole harness is built around. A pin
+        # that deliberately drops an emitter changes this expectation, and does
+        # so here rather than in a table nobody re-reads.
         (row,) = _sweep("--hash", name, "--batch", "4", "--arm", "routed")
         self.assertEqual(row["arm_observed"], arms.Arm.ROUTED.value, row["kernels"])
 

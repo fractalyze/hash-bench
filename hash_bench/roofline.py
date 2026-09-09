@@ -8,11 +8,17 @@ says how much of what the hardware can do the arm reached. So both ceilings come
 from probes compiled through the same frx and the same plugin as the rows.
 
 - **Memory.** An elementwise scale over a large array — one read and one write
-  per element, no reuse — is the streaming ceiling. Measured once per process.
+  per element, no reuse — is the streaming ceiling.
 - **Arithmetic.** A long chain of multiplies over many independent lanes, in the
   ROW'S dtype. A hash's arithmetic ceiling is a multiply rate in its own field
   or word type; comparing a field multiply count against a `uint32` rate would
-  be comparing two different operations. Measured once per dtype.
+  be comparing two different operations.
+
+A `Peaks` is measured ONCE for a backend leg and handed to every arm that runs
+on it. Re-measuring per arm would give the arms of one leg different
+denominators, so a share and the total it is a share of would come from
+different measurements and the three arms would stop being comparable — which
+is the only thing a reader wants from them.
 
 A row is reported against whichever ceiling it is nearer, and both fractions
 appear so the choice is visible rather than asserted. A row with no arithmetic
@@ -36,6 +42,16 @@ _ARITH_PROBE_LANES = 1 << 20
 _ARITH_PROBE_CHAIN = 64
 
 
+def dtype_name(dtype: Any) -> str:
+    """A dtype's readable spelling (`koalabear_mont`), which is both the key a
+    peak is filed under and what its probe text names. `str()` on the class
+    gives `<class 'zk_dtypes.koalabear_mont'>`, and a row may hand over either
+    the class or an array's dtype, so both are normalized here."""
+    import numpy as np
+
+    return str(np.dtype(dtype))
+
+
 @dataclasses.dataclass(frozen=True)
 class MemoryPeak:
     bytes_per_s: float
@@ -49,15 +65,45 @@ class ArithPeak:
     probe: str
 
 
-_memory_peak: MemoryPeak | None = None
-_arith_peaks: dict[str, ArithPeak] = {}
+@dataclasses.dataclass(frozen=True)
+class Peaks:
+    """One leg's ceilings, measured together and reused across its arms.
+
+    `arith` is keyed by `(dtype, unit)` rather than by dtype alone: the unit
+    names what a count means, and two units over one dtype are two different
+    operations whose rates must not be shared.
+    """
+
+    memory: MemoryPeak
+    arith: dict[tuple[str, str], ArithPeak] = dataclasses.field(default_factory=dict)
+
+    def arith_for(self, dtype: Any, unit: str) -> ArithPeak | None:
+        return self.arith.get((dtype_name(dtype), unit))
+
+    def to_json(self) -> dict[str, Any]:
+        """A form that survives the pipe from the probe process to the arm
+        workers. The tuple key is flattened, JSON having no tuple keys."""
+        return {
+            "memory": dataclasses.asdict(self.memory),
+            "arith": [
+                {"dtype": dtype, **dataclasses.asdict(peak)}
+                for (dtype, _unit), peak in self.arith.items()
+            ],
+        }
+
+    @classmethod
+    def from_json(cls, payload: dict[str, Any]) -> "Peaks":
+        arith = {}
+        for entry in payload["arith"]:
+            entry = dict(entry)
+            dtype = entry.pop("dtype")
+            peak = ArithPeak(**entry)
+            arith[(dtype, peak.unit)] = peak
+        return cls(memory=MemoryPeak(**payload["memory"]), arith=arith)
 
 
 def memory_peak(method: timing.Method | None = None) -> MemoryPeak:
-    """The streaming read+write ceiling, measured once per process."""
-    global _memory_peak
-    if _memory_peak is not None:
-        return _memory_peak
+    """The streaming read+write ceiling."""
     import frx
     import frx.numpy as fnp
 
@@ -65,28 +111,23 @@ def memory_peak(method: timing.Method | None = None) -> MemoryPeak:
     fn = frx.jit(lambda a: a * fnp.uint32(3))
     m = timing.measure(fn, x, method)
     traffic = 2 * _MEMORY_PROBE_ELEMENTS * 4
-    _memory_peak = MemoryPeak(
+    return MemoryPeak(
         bytes_per_s=traffic / (m.ns_per_call * 1e-9),
         probe=(
             f"elementwise uint32 scale over {_MEMORY_PROBE_ELEMENTS} elements, "
             "traffic counted as one read plus one write"
         ),
     )
-    return _memory_peak
 
 
 def arith_peak(dtype: Any, unit: str, method: timing.Method | None = None) -> ArithPeak:
-    """The multiply-rate ceiling in `dtype`, measured once per dtype.
+    """The multiply-rate ceiling in `dtype`, reported in `unit`.
 
     The chain is dependent within a lane and independent across lanes, so the
     rate is throughput-limited rather than latency-limited as long as the lane
     count exceeds the machine's parallelism — which `_ARITH_PROBE_LANES` is
     sized for.
     """
-    key = str(dtype)
-    cached = _arith_peaks.get(key)
-    if cached is not None:
-        return cached
     import frx
     import frx.numpy as fnp
 
@@ -99,24 +140,27 @@ def arith_peak(dtype: Any, unit: str, method: timing.Method | None = None) -> Ar
 
     m = timing.measure(frx.jit(chain), x, method)
     ops = _ARITH_PROBE_LANES * _ARITH_PROBE_CHAIN
-    peak = ArithPeak(
+    return ArithPeak(
         ops_per_s=ops / (m.ns_per_call * 1e-9),
         unit=unit,
         probe=(
             f"{_ARITH_PROBE_CHAIN} chained multiplies over {_ARITH_PROBE_LANES} "
-            f"independent {dtype} lanes"
+            f"independent {dtype_name(dtype)} lanes"
         ),
     )
-    _arith_peaks[key] = peak
-    return peak
 
 
-def reset_peaks() -> None:
-    """Drop the per-process caches. For tests that measure under a changed
-    backend or arm inside one process."""
-    global _memory_peak
-    _memory_peak = None
-    _arith_peaks.clear()
+def measure_peaks(
+    units: list[tuple[Any, str]], method: timing.Method | None = None
+) -> Peaks:
+    """Every ceiling one leg needs: the streaming one, and an arithmetic one per
+    `(dtype, unit)` the leg's rows declare a model in."""
+    arith = {}
+    for dtype, unit in units:
+        key = (dtype_name(dtype), unit)
+        if key not in arith:
+            arith[key] = arith_peak(dtype, unit, method)
+    return Peaks(memory=memory_peak(method), arith=arith)
 
 
 def fractions(

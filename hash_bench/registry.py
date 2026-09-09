@@ -49,6 +49,10 @@ class Call:
     hashes: int
     bytes_moved: int
     ops: OpModel | None
+    # The dtype `ops.unit` counts operations in, which is the dtype the
+    # arithmetic ceiling has to be measured in for the fraction to mean
+    # anything. None exactly when `ops` is.
+    ops_dtype: Any | None
 
 
 def _nbytes(arr: Any) -> int:
@@ -105,6 +109,31 @@ class HashSpec:
     message_bytes: int = 0
     op_model: Callable[[Any], OpModel] | None = None
 
+    def _arith_dtype(self, primitive: Any) -> Any:
+        """The dtype this row's `OpModel` counts operations in.
+
+        A permutation's is its state dtype. A byte hash has no single one — its
+        message is bytes and its round function works in words — so a byte-hash
+        row that wants an arithmetic ceiling has to name the dtype itself, and
+        failing here is how it finds out rather than silently being held to a
+        `uint8` multiply rate.
+        """
+        if self.kind == "permutation":
+            return primitive.dtype
+        raise ValueError(
+            f"{self.name}: a {self.kind} row declaring an op model must also say "
+            "which dtype its unit is counted in"
+        )
+
+    def arith_ceiling(self) -> tuple[Any, str] | None:
+        """The `(dtype, unit)` this row needs an arithmetic ceiling in, or None
+        when it declares no model. Read before the sweep so a leg measures every
+        ceiling its rows need in one go."""
+        if self.op_model is None:
+            return None
+        primitive = self.build()
+        return self._arith_dtype(primitive), self.op_model(primitive).unit
+
     def call(self, batch: int) -> Call:
         """Build the primitive and shape one batched call over it."""
         import frx
@@ -134,6 +163,7 @@ class HashSpec:
             hashes=batch,
             bytes_moved=_nbytes(x) + _nbytes(out),
             ops=ops,
+            ops_dtype=self._arith_dtype(unit) if ops else None,
         )
 
 
