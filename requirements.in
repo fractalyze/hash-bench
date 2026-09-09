@@ -1,0 +1,19 @@
+# hash-bench runtime dependencies.
+#
+# NOT the source of `requirements_lock_3_11.txt`. That lock is copied verbatim
+# from the `hash_frx` commit `MODULE.bazel` pins, because a bzlmod consumer
+# resolves each module's pip dependencies from its own lock and only EQUAL
+# versions keep one frx and one zk_dtypes on a test's `sys.path`. Compiling a
+# lock from this file would pick the newest frx satisfying the floor and put two
+# of them in the runfiles tree. So there is deliberately no `requirements.update`
+# target here: bumping the pin means copying that commit's lock over ours.
+#
+# This file records what hash-bench itself imports, so a reader can see which of
+# the locked closure is ours and which arrives for hash_frx.
+absl-py
+numpy
+frx
+frxlib
+frx-cuda12-pjrt
+frx-cuda12-plugin
+zk-dtypes

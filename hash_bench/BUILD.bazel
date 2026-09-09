@@ -1,0 +1,139 @@
+load("@hash_bench_pip//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
+
+# The GPU runtime plugins. Carried by the sweep binary and by the tests that
+# compile a module, because the `gpu` leg initializes the device; inert on the
+# CPU legs. Not attached reflexively — they dominate the runfiles of anything
+# that carries them (hash_frx's `defs.bzl` measures it), so a target that only
+# reads strings does without.
+GPU_PLUGIN_DEPS = [
+    requirement("frx_cuda12_plugin"),
+    requirement("frx_cuda12_pjrt"),
+]
+
+# The row schema and the arm vocabulary: strings and dataclasses, no frx.
+py_library(
+    name = "schema",
+    srcs = [
+        "__init__.py",
+        "arms.py",
+        "backends.py",
+        "results.py",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+py_library(
+    name = "hash_bench",
+    srcs = [
+        "machine.py",
+        "registry.py",
+        "roofline.py",
+        "timing.py",
+    ],
+    # Read at runtime for the hash-frx commit this workspace pins; see the root
+    # BUILD file.
+    data = ["//:MODULE.bazel"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":schema",
+        "@hash_frx//hash_frx",
+        requirement("frx"),
+        requirement("numpy"),
+    ],
+)
+
+py_binary(
+    name = "sweep",
+    srcs = ["sweep.py"],
+    visibility = ["//visibility:public"],
+    deps = [":hash_bench"] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
+    name = "arms_test",
+    srcs = ["testing/arms_test.py"],
+    main = "testing/arms_test.py",
+    deps = [
+        ":schema",
+        requirement("absl_py"),
+    ],
+)
+
+# `available()` starts a throwaway plugin probe, so this needs the GPU plugins
+# even though nothing here measures.
+py_test(
+    name = "backends_test",
+    srcs = ["testing/backends_test.py"],
+    main = "testing/backends_test.py",
+    deps = [
+        ":schema",
+        requirement("absl_py"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
+    name = "results_test",
+    srcs = ["testing/results_test.py"],
+    main = "testing/results_test.py",
+    deps = [
+        ":schema",
+        requirement("absl_py"),
+    ],
+)
+
+py_test(
+    name = "roofline_test",
+    srcs = ["testing/roofline_test.py"],
+    main = "testing/roofline_test.py",
+    deps = [
+        ":hash_bench",
+        requirement("absl_py"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+# Compiles every registry row, so it is the slowest suite here and the one that
+# catches a recognizer the arm list does not know about.
+py_test(
+    name = "registry_test",
+    timeout = "long",
+    srcs = ["testing/registry_test.py"],
+    main = "testing/registry_test.py",
+    deps = [
+        ":hash_bench",
+        requirement("absl_py"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+# Spawns the driver the way a user runs it, so it depends on the binary rather
+# than re-implementing its entry point.
+py_test(
+    name = "sweep_test",
+    timeout = "long",
+    srcs = ["testing/sweep_test.py"],
+    main = "testing/sweep_test.py",
+    deps = [
+        ":sweep",
+        requirement("absl_py"),
+    ],
+)
+
+py_test(
+    name = "timing_test",
+    srcs = ["testing/timing_test.py"],
+    main = "testing/timing_test.py",
+    deps = [
+        ":hash_bench",
+        requirement("absl_py"),
+    ],
+)
+
+py_test(
+    name = "machine_test",
+    srcs = ["testing/machine_test.py"],
+    main = "testing/machine_test.py",
+    deps = [
+        ":hash_bench",
+        requirement("absl_py"),
+    ],
+)

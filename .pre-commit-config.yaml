@@ -1,0 +1,39 @@
+repos:
+    # Runs at the commit-msg stage, so `pre-commit install` alone does not wire
+    # it up: `pre-commit install --hook-type commit-msg` covers it too. Pinned to
+    # the version the team's Commit Lint job runs, so a message that passes here
+    # passes CI.
+-   repo: https://github.com/fractalyze/fractal-lint
+    rev: v0.8.0
+    hooks:
+    -   id: fractal-commit-lint
+-   repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+    -   id: trailing-whitespace
+    -   id: end-of-file-fixer
+    -   id: check-yaml
+    -   id: debug-statements
+    -   id: name-tests-test
+    -   id: requirements-txt-fixer
+        # The lock is a verbatim copy of the pinned hash_frx commit's, and
+        # reordering it would make the two stop comparing equal (requirements.in
+        # says why they must).
+        exclude: requirements_lock_.*\.txt
+-   repo: https://github.com/psf/black
+    # The formatter, deliberately — NOT `ruff format`, matching hash-frx, whose
+    # rows this repo's registry builds against. Ruff below is a linter only.
+    rev: 24.1.1
+    hooks:
+    -   id: black
+        args: ["-l", "88"]
+-   repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.4.10
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix, --select=E501, --select=I, --select=F401]
+-   repo: https://github.com/keith/pre-commit-buildifier
+    rev: 8.0.1
+    hooks:
+      - id: buildifier
+      - id: buildifier-lint
