@@ -50,8 +50,8 @@ class RowTest(absltest.TestCase):
         self.assertTrue(_row().to_json()["as_requested"])
 
     def test_an_observed_arm_differing_from_the_request_is_not(self) -> None:
-        # The standing case: a Poseidon2 permute on the GPU is asked for routed
-        # and lowers generic. The row must not read as if routed had run.
+        # A pin need not offer every arm on every backend. Where it does not,
+        # the row must not read as if the requested arm had run.
         row = _row(arm_requested="routed", arm_observed="generic")
         self.assertFalse(row.to_json()["as_requested"])
 
@@ -68,8 +68,8 @@ class TableTest(absltest.TestCase):
         self.assertIn("28.0% of arithmetic", rendered)
 
     def test_compile_time_is_shown_beside_the_run_time(self) -> None:
-        # The arms differ in it by orders of magnitude, so a table without it
-        # invites reading a declined row as merely slower.
+        # Compile cost is an axis the arms differ on, so a table without it
+        # invites reading a slow-to-compile row as merely slower to run.
         self.assertIn("0.00", results.table([_row(compile_ns=1_500_000).to_json()]))
         self.assertIn(
             "42.00", results.table([_row(compile_ns=42_000_000_000).to_json()])

@@ -15,9 +15,9 @@ The harness is the gate for every hand-written hash emitter deletion in hash-frx
 and xla: an emitter goes only after the generic path measures at or above it at
 every batch on both backends.
 
-The registry today holds hash-frx's own rows and its three arms. The external
-references above are rows of the same shape, measured by the same driver against
-the same ceilings, and land with the units that pin them.
+The external references above are rows of the same shape, measured by the same
+driver against the same ceilings; `hash_bench/registry.py` is the list of rows
+that exist.
 
 ## Running it
 
@@ -40,9 +40,10 @@ the same time. The summary table goes to stderr, and `--quiet` drops it.
 `results/README.md` documents every field; the short version is that a row is
 self-contained, and `arm_observed` — not `arm_requested` — says what ran.
 
-`bazel test //...` is the harness's own suite. It asserts that rows are
-produced, classified and modelled correctly on whatever backend is present; it
-measures nothing anyone should quote.
+`bazel test //...` is the harness's own suite, and it runs on CPU only: it
+asserts that rows are produced, classified and modelled correctly, and it
+measures nothing anyone should quote. GPU routing is exercised by running the
+sweep, not by the suite.
 
 ## The three arms
 

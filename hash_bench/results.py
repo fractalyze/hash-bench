@@ -26,15 +26,15 @@ class Row:
     backend: str
     arm_requested: str
     # What the compiled module showed. Differs from the request whenever the pin
-    # or the backend does not offer the requested arm — a Poseidon2 permute on
-    # the GPU is the standing case — and the timing belongs to THIS arm.
+    # or the backend does not offer the requested arm, and the timing then
+    # belongs to THIS arm, not to the one asked for.
     arm_observed: str
     kernels: tuple[str, ...]
     # Wall time to lower and compile this call once. It belongs in the row
-    # because the arms differ in it by orders of magnitude — a declined region
-    # inlines its whole round schedule and hands the backend a module the
-    # emitter existed to avoid — and an arm that wins at run time while costing
-    # minutes to compile is a different trade, not a free one.
+    # because compile cost is an axis the arms differ on — a declined region
+    # inlines its whole round schedule and hands the backend the module the
+    # emitter existed to avoid — so an arm that wins at run time while costing
+    # more to compile is a different trade, not a free one.
     compile_ns: int
     ns_per_hash: float
     ns_per_hash_min: float

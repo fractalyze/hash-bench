@@ -26,9 +26,9 @@ observes `routed` against a `generic` request and says so — and
 is where a new recognizer gets caught.
 
 Which arms a (hash, backend) pair can reach is a property of the pin, not of
-this file. Poseidon2's standalone permute routes on CPU and deliberately does
-not on GPU, so a GPU `routed` request observes `generic`; the row says so rather
-than relabelling the number.
+this file: a hash-frx family names the backends each of its emitters was written
+for, and a request for an arm the pair cannot reach observes whatever did run.
+The row records that rather than relabelling the number.
 """
 
 from __future__ import annotations

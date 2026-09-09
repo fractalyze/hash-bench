@@ -26,15 +26,15 @@ kernels           the custom-fusion computations the module contained; this is
 
 **Read `arm_observed`, not `arm_requested`.** A marker no pass claims inlines
 silently and still computes the right bytes, so a request is not evidence that
-the arm ran. Where the two differ, the number belongs to `arm_observed` — a
-Poseidon2 permute asked for `routed` on the GPU observes `generic`, because that
-pin routes the standalone permute marker on CPU only.
+the arm ran. A pin does not owe every arm on every backend — a hash-frx family
+names the backends each of its emitters was written for — so where the two
+differ, the number belongs to `arm_observed` and the requested arm did not run.
 
 ```
-compile_ns        wall time to lower and compile the call once. The arms differ
-                  in it by orders of magnitude — a declined region inlines its
+compile_ns        wall time to lower and compile the call once. Compile cost is
+                  an axis the arms differ on — a declined region inlines its
                   whole round schedule — so an arm that wins at run time while
-                  costing minutes to compile is a different trade, not a free one
+                  costing more to compile is a different trade, not a free one
 ns_per_hash       the reported number: the median call time divided by batch
 ns_per_hash_min   the fastest rep, same division — the noise floor of this row
 spread            (max - min) / median across reps. A large spread is a row
@@ -79,8 +79,14 @@ machine.revisions every version that decides what the number means
 
 `machine.revisions["frx-cuda12-plugin"]` **is** the Fractalyze XLA revision. A
 row measured against a different one is not comparable to this one however alike
-the machines are. `hash-frx-sha` is filled when hash-frx came from a checkout
-rather than a wheel, which is how a local run is told apart from a pinned one.
+the machines are.
+
+hash-frx takes two entries, and which one names the commit that ran depends on
+how it arrived. `hash-frx-pin` is the commit `MODULE.bazel` pins and is always
+present. `hash-frx-sha` is filled only when hash-frx came from a git checkout on
+`sys.path` — a local dev run — and is then the commit that ran; a
+`git_override`-fetched module has no `.git` to read, so a pinned run leaves it
+null and `hash-frx-pin` is the answer.
 
 ## What a comparison needs
 

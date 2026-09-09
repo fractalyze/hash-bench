@@ -3,9 +3,10 @@ build --announce_rc
 test --test_output=errors
 
 # The suite is a harness test suite, not a measurement: it asserts that rows are
-# produced, classified and modelled correctly, on whatever backend is present.
-# CPU keeps it deterministic on any machine; the sweep itself picks its backend
-# from `--backend`, never from here.
+# produced, classified and modelled correctly. It runs on CPU only — this pins
+# the backend, and `sweep_test` asks the driver for the CPU leg — so it is
+# deterministic on any machine and covers no GPU-specific routing. The sweep
+# itself picks its backends from `--backend`, never from here.
 test --test_env=FRX_PLATFORMS=cpu
 
 # Never let Bazel synthesize an `__init__.py` into a runfiles tree (it can write
