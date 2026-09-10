@@ -20,11 +20,12 @@ Narrow it with `--hash`, `--batch`, `--backend` and `--arm`; each is repeatable
 and defaults to everything available.
 
 `--arm` spans two vocabularies. The three hash-frx lowerings (`arms.py`) are
-requested through `XLA_FLAGS`; the external CPU references (`references.py`) are
+requested through `XLA_FLAGS`; the external references (`references.py`) are
 pinned implementations reached through `ctypes`, and are arms of the same sweep
 so that a reference row and a hash-frx row are one measurement apart rather than
-one harness apart. A reference is offered on the CPU legs only and produces rows
-only for the hashes its codebase implements.
+one harness apart. A reference is offered on the legs its code targets — the
+CPU references on the CPU legs, a CUDA reference on the GPU leg — and produces
+rows only for the hashes its codebase implements.
 """
 
 from __future__ import annotations
@@ -206,13 +207,12 @@ def _probe_peaks(args: argparse.Namespace, leg: backends.Leg) -> str:
 def _offered(arm: str, leg_name: str) -> bool:
     """Whether this leg offers this arm.
 
-    Only references narrow: they are the CPU frontier, and a GPU reference is a
-    different set of codebases and a different pin. A hash-frx arm is offered on
-    every leg and, where the pin cannot reach it, the row says which arm ran
-    instead — that substitution is the harness's subject, so it is never
+    Only references narrow, each to the legs its code targets. A hash-frx arm is
+    offered on every leg and, where the pin cannot reach it, the row says which
+    arm ran instead — that substitution is the harness's subject, so it is never
     filtered out here.
     """
-    return not references.is_reference(arm) or leg_name in references.CPU_LEGS
+    return not references.is_reference(arm) or leg_name in references.get(arm).legs
 
 
 def orchestrate(args: argparse.Namespace) -> int:
@@ -388,7 +388,7 @@ def _reference_rows(
     reference's equivalent of the revisions a hash-frx row reads off the wheels.
     """
     provenance = ref.provenance.to_json()
-    method = method.synchronous()
+    method = ref.dispatched(method)
     for spec in references.rows(ref, selected):
         for batch in batches:
             call = ref.call(spec, batch)
@@ -399,9 +399,7 @@ def _reference_rows(
                 arm=ref.name,
                 call=call,
                 compile_ns=None,
-                measurement=timing.measure(
-                    call.fn, call.x, method, block=timing.block_none
-                ),
+                measurement=timing.measure(call.fn, call.x, method, block=ref.block),
                 observed=ref.name,
                 callees=(ref.symbol(spec.name),),
                 peaks=peaks,

@@ -21,9 +21,15 @@ from __future__ import annotations
 import numpy as np
 from absl.testing import absltest, parameterized
 
-from hash_bench import references, registry
+from hash_bench import backends, references, registry, timing
 
 _BATCH = 4
+
+
+def _require_device(test: absltest.TestCase, ref: references.Reference) -> None:
+    """Skip, visibly, a CUDA reference on a host with no device to run it."""
+    if ref.gpu and ref.cuda.device_count() == 0:
+        test.skipTest(f"{ref.name} is a CUDA reference and this host has no device")
 
 
 def _pairs() -> list[tuple[str, str, str]]:
@@ -55,6 +61,34 @@ class ProvenanceTest(parameterized.TestCase):
         # a debug-grade program under the upstream's name.
         self.assertEqual(provenance.compilation_mode, "opt")
 
+    @parameterized.named_parameters(
+        (name, name) for name in references.names() if references.get(name).gpu
+    )
+    def test_a_cuda_reference_names_its_architectures_and_compiler(
+        self, name: str
+    ) -> None:
+        """A kernel built for another architecture runs as JIT-compiled PTX, so
+        the setting it was built under is part of what the row measured; the
+        nvcc is reported by the kernel's own translation unit."""
+        provenance = references.get(name).provenance
+        self.assertTrue(
+            any(f.startswith("--@rules_cuda//cuda:archs=") for f in provenance.flags),
+            provenance.flags,
+        )
+        self.assertStartsWith(provenance.runtime_dispatch, "nvcc ")
+
+    def test_a_patched_upstream_names_its_patch(self) -> None:
+        """The revision alone names an upstream that did not run once a patch
+        is applied, so the patch rides in the row; one measured as released
+        names none."""
+        self.assertIn(
+            "//third_party:openvm_poseidon2_kb_plonky3_0_7_0.patch",
+            references.get("openvm").provenance.patches,
+        )
+        for name in references.names():
+            if name != "openvm":
+                self.assertEqual(references.get(name).provenance.patches, (), name)
+
     @parameterized.named_parameters(*_pairs())
     def test_covered_hash_is_in_the_registry(self, name: str, hash_name: str) -> None:
         """A reference covering a hash the registry does not carry would produce
@@ -67,19 +101,22 @@ class AgreementTest(parameterized.TestCase):
     @parameterized.named_parameters(*_pairs())
     def test_reference_reproduces_hash_frx(self, name: str, hash_name: str) -> None:
         ref = references.get(name)
+        _require_device(self, ref)
         spec = next(registry.rows((hash_name,)))
 
         frx_call = spec.call(_BATCH)
         expected = np.asarray(frx_call.fn(frx_call.x))
 
         ref_call = ref.call(spec, _BATCH)
-        actual = np.asarray(ref_call.fn(ref_call.x))
+        result = ref_call.fn(ref_call.x)
+        ref.block(result)
+        actual = np.asarray(result)
 
         # The two sides have to be fed the same bytes for the comparison to say
         # anything; that they are is a property of `references` building its
         # input to the pattern `HashSpec.call` builds, so it is asserted rather
         # than assumed.
-        np.testing.assert_array_equal(np.asarray(frx_call.x), ref_call.x)
+        np.testing.assert_array_equal(np.asarray(frx_call.x), np.asarray(ref_call.x))
         np.testing.assert_array_equal(actual, expected)
 
     @parameterized.named_parameters(*_pairs())
@@ -88,11 +125,34 @@ class AgreementTest(parameterized.TestCase):
         ceiling to mean the same thing. A reference that wrote its digests into
         a differently shaped buffer would report a different roofline fraction
         for the same work."""
+        _require_device(self, references.get(name))
         spec = next(registry.rows((hash_name,)))
         self.assertEqual(
             references.get(name).call(spec, _BATCH).bytes_moved,
             spec.call(_BATCH).bytes_moved,
         )
+
+
+class DispatchTest(absltest.TestCase):
+    """How a reference is timed follows from what it is, checked without a
+    device: a CUDA launch returns before its kernel ends, so a rep keeps the
+    asynchronous method and waits on the stream; a native call has returned
+    its result already."""
+
+    def test_a_cuda_reference_keeps_the_asynchronous_method(self) -> None:
+        method = timing.Method()
+        self.assertIs(references.get("openvm").dispatched(method), method)
+
+    def test_a_native_reference_is_timed_synchronously(self) -> None:
+        method = timing.Method()
+        self.assertEqual(
+            references.get("plonky3").dispatched(method), method.synchronous()
+        )
+
+    def test_a_rep_waits_on_the_stream_only_for_a_cuda_reference(self) -> None:
+        openvm = references.get("openvm")
+        self.assertEqual(openvm.block, openvm.cuda.synchronize)
+        self.assertIs(references.get("plonky3").block, timing.block_none)
 
 
 class SelectionTest(absltest.TestCase):
@@ -108,6 +168,13 @@ class SelectionTest(absltest.TestCase):
         uncovered = [n for n in registry.names() if not ref.covers(n)]
         self.assertNotEmpty(uncovered)
         self.assertEmpty(list(references.rows(ref, tuple(uncovered))))
+
+    def test_every_reference_is_offered_on_legs_that_exist(self) -> None:
+        """A leg name no backend defines would drop the reference from every
+        sweep without a word."""
+        for name in references.names():
+            for leg in references.get(name).legs:
+                self.assertIn(leg, backends.names(), name)
 
     def test_unknown_reference_names_the_ones_that_exist(self) -> None:
         with self.assertRaisesRegex(KeyError, "no such reference"):

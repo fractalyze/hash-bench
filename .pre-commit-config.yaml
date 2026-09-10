@@ -11,6 +11,9 @@ repos:
     rev: v6.0.0
     hooks:
     -   id: trailing-whitespace
+        # A unified diff's blank context line is a single space; stripping it
+        # leaves a hunk that no longer matches the upstream file it patches.
+        exclude: third_party/.*\.patch
     -   id: end-of-file-fixer
     -   id: check-yaml
     -   id: debug-statements
