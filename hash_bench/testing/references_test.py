@@ -21,7 +21,7 @@ from __future__ import annotations
 import numpy as np
 from absl.testing import absltest, parameterized
 
-from hash_bench import backends, references, registry
+from hash_bench import backends, references, registry, timing
 
 _BATCH = 4
 
@@ -77,6 +77,18 @@ class ProvenanceTest(parameterized.TestCase):
         )
         self.assertStartsWith(provenance.runtime_dispatch, "nvcc ")
 
+    def test_a_patched_upstream_names_its_patch(self) -> None:
+        """The revision alone names an upstream that did not run once a patch
+        is applied, so the patch rides in the row; one measured as released
+        names none."""
+        self.assertIn(
+            "//third_party:openvm_poseidon2_kb_plonky3_0_7_0.patch",
+            references.get("openvm").provenance.patches,
+        )
+        for name in references.names():
+            if name != "openvm":
+                self.assertEqual(references.get(name).provenance.patches, (), name)
+
     @parameterized.named_parameters(*_pairs())
     def test_covered_hash_is_in_the_registry(self, name: str, hash_name: str) -> None:
         """A reference covering a hash the registry does not carry would produce
@@ -119,6 +131,28 @@ class AgreementTest(parameterized.TestCase):
             references.get(name).call(spec, _BATCH).bytes_moved,
             spec.call(_BATCH).bytes_moved,
         )
+
+
+class DispatchTest(absltest.TestCase):
+    """How a reference is timed follows from what it is, checked without a
+    device: a CUDA launch returns before its kernel ends, so a rep keeps the
+    asynchronous method and waits on the stream; a native call has returned
+    its result already."""
+
+    def test_a_cuda_reference_keeps_the_asynchronous_method(self) -> None:
+        method = timing.Method()
+        self.assertIs(references.get("openvm").dispatched(method), method)
+
+    def test_a_native_reference_is_timed_synchronously(self) -> None:
+        method = timing.Method()
+        self.assertEqual(
+            references.get("plonky3").dispatched(method), method.synchronous()
+        )
+
+    def test_a_rep_waits_on_the_stream_only_for_a_cuda_reference(self) -> None:
+        openvm = references.get("openvm")
+        self.assertEqual(openvm.block, openvm.cuda.synchronize)
+        self.assertIs(references.get("plonky3").block, timing.block_none)
 
 
 class SelectionTest(absltest.TestCase):
