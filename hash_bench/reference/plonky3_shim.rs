@@ -14,13 +14,31 @@
 // choice — `p3-koala-bear` selects its packed field on `target_feature` — so
 // `hash_bench_plonky3_capabilities` reports what the compiler actually enabled,
 // and a build whose flags did not land says `scalar` instead of claiming AVX.
+//
+// The permutation runs over `[KoalaBear::Packing; 16]`, which is the form
+// `Poseidon2KoalaBear`'s own documentation says to use "wherever possible", and
+// the only one that reaches the packed field at all: handing it
+// `[KoalaBear; 16]` compiles and computes the right state one permutation at a
+// time, which measured ~6x slower here and is not what this reference is for.
+//
+// Reaching it costs a transpose. A packed lane holds element `j` of `WIDTH`
+// DIFFERENT states, while the harness's array is one state per row, so each
+// group is gathered on the way in and scattered on the way out. That work is
+// inside the timed region deliberately: the row's input and output layouts are
+// the ones its hash-frx counterpart is handed, and what an implementation does
+// between them is the thing being measured.
 
 use std::ffi::c_char;
 use std::sync::OnceLock;
 
+use p3_field::{Field, PackedValue};
 use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear, default_koalabear_poseidon2_16};
 use p3_symmetric::Permutation;
 use rayon::prelude::*;
+
+/// Plonky3's vector of KoalaBears for this target — one AVX-512 register under
+/// the flags this shim is built with, and a one-element array under none.
+type Packed = <KoalaBear as Field>::Packing;
 
 const WIDTH: usize = 16;
 
@@ -36,17 +54,43 @@ fn permutation() -> &'static Poseidon2KoalaBear<WIDTH> {
     PERMUTATION.get_or_init(default_koalabear_poseidon2_16)
 }
 
-fn permute_all(states: &mut [KoalaBear]) {
-    let permutation = permutation();
-    let apply = |state: &mut [KoalaBear]| {
+/// Permute `Packed::WIDTH` states at once, transposing in and out.
+fn permute_group(permutation: &Poseidon2KoalaBear<WIDTH>, group: &mut [KoalaBear]) {
+    let lanes = group.len() / WIDTH;
+    let mut packed: [Packed; WIDTH] =
+        std::array::from_fn(|j| Packed::from_fn(|lane| group[lane * WIDTH + j]));
+    permutation.permute_mut(&mut packed);
+    for (j, column) in packed.iter().enumerate() {
+        for (lane, value) in column.as_slice()[..lanes].iter().enumerate() {
+            group[lane * WIDTH + j] = *value;
+        }
+    }
+}
+
+/// The states a group short of `Packed::WIDTH`, one at a time.
+fn permute_each(permutation: &Poseidon2KoalaBear<WIDTH>, tail: &mut [KoalaBear]) {
+    for state in tail.chunks_exact_mut(WIDTH) {
         let state: &mut [KoalaBear; WIDTH] = state.try_into().expect("width-16 chunk");
         permutation.permute_mut(state);
-    };
-    if states.len() / WIDTH >= PARALLEL_MIN {
-        states.par_chunks_exact_mut(WIDTH).for_each(apply);
-    } else {
-        states.chunks_exact_mut(WIDTH).for_each(apply);
     }
+}
+
+fn permute_all(states: &mut [KoalaBear]) {
+    let permutation = permutation();
+    let group_elements = Packed::WIDTH * WIDTH;
+    let batch = states.len() / WIDTH;
+    let groups = states.len() / group_elements;
+    let (whole, tail) = states.split_at_mut(groups * group_elements);
+    if batch >= PARALLEL_MIN {
+        whole
+            .par_chunks_exact_mut(group_elements)
+            .for_each(|group| permute_group(permutation, group));
+    } else {
+        whole
+            .chunks_exact_mut(group_elements)
+            .for_each(|group| permute_group(permutation, group));
+    }
+    permute_each(permutation, tail);
 }
 
 /// # Safety
@@ -70,15 +114,18 @@ pub unsafe extern "C" fn hash_bench_plonky3_poseidon2_koalabear16(
 
 #[no_mangle]
 pub extern "C" fn hash_bench_plonky3_capabilities() -> *const c_char {
-    // What `p3-koala-bear`'s own `cfg` gates saw, evaluated here under the same
-    // flags, so this names the backend that was compiled in rather than the one
-    // the build meant to ask for.
-    let described: &[u8] = if cfg!(all(target_arch = "x86_64", target_feature = "avx512f")) {
-        b"packed field: x86_64_avx512\0"
-    } else if cfg!(all(target_arch = "x86_64", target_feature = "avx2")) {
-        b"packed field: x86_64_avx2\0"
-    } else {
-        b"packed field: scalar\0"
+    // The packing width `p3-monty-31` resolved, not this crate's view of the
+    // target features. The two are different questions and the difference is
+    // the whole failure mode: `target_feature` is read when EACH crate
+    // compiles, so a build that sets the features on this shim alone reports
+    // avx512 from a `cfg!` here while `KoalaBear::Packing` is still the
+    // one-element scalar array the dependency resolved. A width of 1 is that
+    // build, said out loud.
+    let described: &[u8] = match Packed::WIDTH {
+        16 => b"packed field: 16 KoalaBears per vector (avx512)\0",
+        8 => b"packed field: 8 KoalaBears per vector (avx2)\0",
+        1 => b"packed field: scalar, 1 KoalaBear per vector\0",
+        _ => b"packed field: unrecognized width\0",
     };
     described.as_ptr() as *const c_char
 }

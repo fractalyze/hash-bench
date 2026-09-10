@@ -108,9 +108,10 @@ rust_reference_shim(
     rustc_flags = PLONKY3_RUSTC_FLAGS,
     source = "https://github.com/Plonky3/Plonky3",
     deps = [
+        "@hash_bench_crates//:p3-field",
         "@hash_bench_crates//:p3-koala-bear",
         "@hash_bench_crates//:p3-symmetric",
         "@hash_bench_crates//:rayon",
     ],
-    implementation = "p3-koala-bear's default_koalabear_poseidon2_16, over the packed field the target features select",
+    implementation = "p3-koala-bear's default_koalabear_poseidon2_16, over [KoalaBear::Packing; 16] — the packed field the target features select",
 )

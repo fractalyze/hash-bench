@@ -14,5 +14,23 @@ test --test_env=FRX_PLATFORMS=cpu
 # full account).
 build --incompatible_default_to_explicit_init_py
 
+# The Plonky3 reference measures a packed field, and which one it gets is a
+# `target_feature` gate read when EACH crate compiles. Setting the features on
+# the shim alone leaves `KoalaBear::Packing` as whatever `p3-monty-31` resolved
+# it to — its own build having seen no features — so the shim compiles against
+# a scalar packing and quietly measures one permutation at a time. The flags
+# therefore belong to the whole Rust build, which here is exactly that shim and
+# its pinned crates. `plonky3_shim` reports the packing width it actually got,
+# so a build where this failed to apply says so in the row rather than claiming
+# AVX-512.
+# One feature per flag: the list-valued setting splits on commas, which would
+# hand rustc `+avx512vl` as an input filename. `-Ctarget-feature` accumulates
+# across repeats.
+build --@rules_rust//rust/settings:extra_rustc_flag=-Copt-level=3
+build --@rules_rust//rust/settings:extra_rustc_flag=-Ctarget-feature=+avx512f
+build --@rules_rust//rust/settings:extra_rustc_flag=-Ctarget-feature=+avx512vl
+build --@rules_rust//rust/settings:extra_rustc_flag=-Ctarget-feature=+avx512bw
+build --@rules_rust//rust/settings:extra_rustc_flag=-Ctarget-feature=+avx512dq
+
 # Local, machine-specific overrides (gitignored).
 try-import %workspace%/.bazelrc.user
