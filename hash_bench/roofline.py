@@ -3,9 +3,12 @@
 that runs the sweep.
 
 A spec-sheet peak would make the fraction a property of the datasheet rather
-than of this machine and this compiler, and the fraction is the whole point: it
-says how much of what the hardware can do the arm reached. So both ceilings come
-from probes compiled through the same frx and the same plugin as the rows.
+than of this machine and this compiler, so both ceilings come from probes
+compiled through the same frx and the same plugin as the rows. That makes each
+ceiling the rate of one frx-compiled probe, not a hardware roof: a fraction
+compares a row with one streaming kernel and one multiply chain on this
+machine, and other code — hash-frx's own emitters included — can run above
+either.
 
 - **Memory.** An elementwise scale over a large array — one read and one write
   per element, no reuse — is the streaming ceiling.
@@ -115,7 +118,7 @@ def memory_peak(method: timing.Method | None = None) -> MemoryPeak:
         bytes_per_s=traffic / (m.ns_per_call * 1e-9),
         probe=(
             f"elementwise uint32 scale over {_MEMORY_PROBE_ELEMENTS} elements, "
-            "traffic counted as one read plus one write"
+            "traffic counted as one read plus one write, compiled by frx"
         ),
     )
 
@@ -145,7 +148,7 @@ def arith_peak(dtype: Any, unit: str, method: timing.Method | None = None) -> Ar
         unit=unit,
         probe=(
             f"{_ARITH_PROBE_CHAIN} chained multiplies over {_ARITH_PROBE_LANES} "
-            f"independent {dtype_name(dtype)} lanes"
+            f"independent {dtype_name(dtype)} lanes, compiled by frx"
         ),
     )
 
@@ -161,6 +164,28 @@ def measure_peaks(
         if key not in arith:
             arith[key] = arith_peak(dtype, unit, method)
     return Peaks(memory=memory_peak(method), arith=arith)
+
+
+# Why a probe a row outruns stops being a ceiling for that row: each is the
+# rate of one frx-compiled kernel, which other code can beat.
+_OUTRUN = {
+    "memory": "the memory probe is one frx-compiled streaming kernel's rate",
+    "arithmetic": "the arithmetic probe is one frx-compiled multiply chain's rate",
+}
+
+
+def _unless_outrun(fractions_by_probe: dict[str, float], bound: str) -> str:
+    """`bound`, unless the row runs above one of its probes.
+
+    A fraction above one proves that probe is not a ceiling for this row, and a
+    verdict read off it would hold the row to a roof it is already above. The
+    fractions stay in the block either way; only the verdict is withheld.
+    """
+    outrun = [name for name, f in fractions_by_probe.items() if f > 1.0]
+    if not outrun:
+        return bound
+    reasons = "; ".join(_OUTRUN[name] for name in outrun)
+    return f"none (exceeds the {' and '.join(outrun)} probe: {reasons})"
 
 
 def fractions(
@@ -188,7 +213,10 @@ def fractions(
         "bound": "memory",
     }
     if ops_per_s is None or arith is None:
-        block["bound"] = "memory (no arithmetic model declared for this hash)"
+        block["bound"] = _unless_outrun(
+            {"memory": memory_fraction},
+            "memory (no arithmetic model declared for this hash)",
+        )
         return block
     arith_fraction = ops_per_s / arith.ops_per_s
     block.update(
@@ -196,6 +224,9 @@ def fractions(
         peak_ops_per_s=arith.ops_per_s,
         arith_unit=arith.unit,
         arith_probe=arith.probe,
-        bound="arithmetic" if arith_fraction >= memory_fraction else "memory",
+        bound=_unless_outrun(
+            {"memory": memory_fraction, "arithmetic": arith_fraction},
+            "arithmetic" if arith_fraction >= memory_fraction else "memory",
+        ),
     )
     return block

@@ -11,6 +11,11 @@ pool, and does both: the affinity mask is what actually bounds the work, and
 the single-threaded Eigen flag is what stops a 24-thread pool from thrashing
 inside a one-core mask. Affinity is set in the worker process, so it covers the
 backend's own threads, which are spawned when the plugin loads.
+
+The same leg carries the thread-count knobs the reference arms' own runtimes
+read. A reference is not lowered by XLA and does not see its flags, so without
+them the one-core leg would pin the process to one core and then have a
+reference oversubscribe it.
 """
 
 from __future__ import annotations
@@ -38,7 +43,14 @@ LEGS: tuple[Leg, ...] = (
         name="cpu-1core",
         frx_platforms="cpu",
         xla_flags=("--xla_cpu_multi_thread_eigen=false",),
-        env=(("OMP_NUM_THREADS", "1"),),
+        env=(
+            ("OMP_NUM_THREADS", "1"),
+            # The reference arms bring their own thread pools, and a pool that
+            # sized itself from the machine would put a thread per core inside
+            # a one-core mask. One knob per runtime, because they read different
+            # ones: the C shims are OpenMP, Plonky3 is rayon.
+            ("RAYON_NUM_THREADS", "1"),
+        ),
         one_core=True,
     ),
     Leg(name="cpu", frx_platforms="cpu"),

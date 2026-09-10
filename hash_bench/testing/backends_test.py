@@ -23,6 +23,17 @@ class LegTest(absltest.TestCase):
         self.assertIn("--xla_cpu_multi_thread_eigen=false", leg.xla_flags)
         self.assertIn(("OMP_NUM_THREADS", "1"), leg.env)
 
+    def test_the_one_core_leg_bounds_every_runtime_a_reference_may_bring(
+        self,
+    ) -> None:
+        # A reference is not lowered by XLA and never sees its flags, so its own
+        # pool has to be told separately or the leg pins one core and then lets
+        # a reference put a thread per core inside it. One knob per runtime,
+        # because they read different ones.
+        env = dict(backends.get("cpu-1core").env)
+        self.assertEqual(env["OMP_NUM_THREADS"], "1")
+        self.assertEqual(env["RAYON_NUM_THREADS"], "1")
+
     def test_only_the_gpu_leg_needs_a_device(self) -> None:
         needing = [leg.name for leg in backends.LEGS if leg.needs_device]
         self.assertEqual(needing, ["gpu"])

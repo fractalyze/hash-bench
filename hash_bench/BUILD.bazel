@@ -27,13 +27,23 @@ py_library(
     name = "hash_bench",
     srcs = [
         "machine.py",
+        "references.py",
         "registry.py",
         "roofline.py",
         "timing.py",
     ],
-    # Read at runtime for the hash-frx commit this workspace pins; see the root
-    # BUILD file.
-    data = ["//:MODULE.bazel"],
+    data = [
+        # Read at runtime for the hash-frx commit this workspace pins; see the
+        # root BUILD file.
+        "//:MODULE.bazel",
+        # The reference shared objects and the provenance each was built with.
+        # `references.py` dlopens them out of the runfiles tree, so they are
+        # data rather than deps: nothing here links against them.
+        "//hash_bench/reference:blake3",
+        "//hash_bench/reference:openssl",
+        "//hash_bench/reference:plonky3",
+        "//hash_bench/reference:xkcp",
+    ],
     visibility = ["//visibility:public"],
     deps = [
         ":schema",
@@ -99,6 +109,19 @@ py_test(
     timeout = "long",
     srcs = ["testing/registry_test.py"],
     main = "testing/registry_test.py",
+    deps = [
+        ":hash_bench",
+        requirement("absl_py"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+# Runs both sides of every (reference, hash) pair and compares the bytes, so it
+# compiles hash-frx rows as well as loading the shared objects.
+py_test(
+    name = "references_test",
+    timeout = "long",
+    srcs = ["testing/references_test.py"],
+    main = "testing/references_test.py",
     deps = [
         ":hash_bench",
         requirement("absl_py"),

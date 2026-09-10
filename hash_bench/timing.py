@@ -32,6 +32,9 @@ DEFAULT_REPS = 7
 DEFAULT_TARGET_REP_NS = 20_000_000  # 20 ms
 MAX_ITERS = 100_000
 
+ASYNC_DISPATCH = "iters independent calls per rep, blocked once at the end"
+SYNC_DISPATCH = "iters independent synchronous calls per rep; nothing to block on"
+
 
 @dataclasses.dataclass(frozen=True)
 class Method:
@@ -42,11 +45,19 @@ class Method:
     target_rep_ns: int = DEFAULT_TARGET_REP_NS
     iters: int = 0  # filled in by calibration
     statistic: str = "median over reps of the mean over iters"
-    dispatch: str = "iters independent calls per rep, blocked once at the end"
+    dispatch: str = ASYNC_DISPATCH
     timer: str = "time.perf_counter_ns"
 
     def with_iters(self, iters: int) -> "Method":
         return dataclasses.replace(self, iters=iters)
+
+    def synchronous(self) -> "Method":
+        """The same method against a call that returns complete. Every field a
+        comparison rests on — warmup, reps, the calibration target, the
+        statistic, the timer — is unchanged; only the account of what the block
+        at the end of a rep waited for differs, because for a native reference
+        it waited for nothing."""
+        return dataclasses.replace(self, dispatch=SYNC_DISPATCH)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -60,27 +71,43 @@ class Measurement:
     method: Method
 
 
-def _block(out: Any) -> None:
+Blocker = Callable[[Any], None]
+
+
+def block_frx(out: Any) -> None:
+    """Wait for an frx call's result. The default, and what every backend leg
+    with an asynchronous queue needs."""
     import frx
 
     frx.block_until_ready(out)
 
 
-def _one_rep(fn: Callable[[Any], Any], x: Any, iters: int) -> int:
+def block_none(_out: Any) -> None:
+    """Wait for nothing. A native reference call has already returned its
+    result, so there is no queue to drain; saying so explicitly is what keeps
+    `frx` out of a reference worker's timed region."""
+
+
+def _one_rep(fn: Callable[[Any], Any], x: Any, iters: int, block: Blocker) -> int:
     start = time.perf_counter_ns()
     out = None
     for _ in range(iters):
         out = fn(x)
-    _block(out)
+    block(out)
     return time.perf_counter_ns() - start
 
 
-def calibrate(fn: Callable[[Any], Any], x: Any, target_rep_ns: int) -> int:
+def calibrate(
+    fn: Callable[[Any], Any],
+    x: Any,
+    target_rep_ns: int,
+    block: Blocker = block_frx,
+) -> int:
     """How many calls make one rep span `target_rep_ns`, doubling from one until
     the measured span is long enough to extrapolate from."""
     iters = 1
     while iters < MAX_ITERS:
-        elapsed = _one_rep(fn, x, iters)
+        elapsed = _one_rep(fn, x, iters, block)
         if elapsed >= target_rep_ns // 4:
             return max(1, min(MAX_ITERS, round(iters * target_rep_ns / elapsed)))
         iters *= 2
@@ -88,14 +115,17 @@ def calibrate(fn: Callable[[Any], Any], x: Any, target_rep_ns: int) -> int:
 
 
 def measure(
-    fn: Callable[[Any], Any], x: Any, method: Method | None = None
+    fn: Callable[[Any], Any],
+    x: Any,
+    method: Method | None = None,
+    block: Blocker = block_frx,
 ) -> Measurement:
     """Time `fn(x)` under `method`, returning nanoseconds per call."""
     method = method or Method()
     for _ in range(method.warmup):
-        _block(fn(x))
-    iters = method.iters or calibrate(fn, x, method.target_rep_ns)
-    per_call = [_one_rep(fn, x, iters) / iters for _ in range(method.reps)]
+        block(fn(x))
+    iters = method.iters or calibrate(fn, x, method.target_rep_ns, block)
+    per_call = [_one_rep(fn, x, iters, block) / iters for _ in range(method.reps)]
     median = statistics.median(per_call)
     return Measurement(
         ns_per_call=median,

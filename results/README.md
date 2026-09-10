@@ -17,11 +17,15 @@ hash              the registry row: a permutation name, or a byte hash at the
 batch             hashes per call — the axis a permutation is vmapped over, and
                   the leading axis of a byte hash's message array
 backend           cpu-1core | cpu | gpu   (see `hash_bench/backends.py`)
-arm_requested     the lowering the run asked for: routed | generic | declined
-arm_observed      the lowering the COMPILED MODULE showed
+arm_requested     what the run asked for: one of hash-frx's lowerings
+                  (routed | generic | declined) or a pinned external reference
+                  (`hash_bench/references.py`)
+arm_observed      what actually ran — the lowering the COMPILED MODULE showed,
+                  or, on a reference arm, the reference itself
 as_requested      arm_observed == arm_requested
-kernels           the custom-fusion computations the module contained; this is
-                  the evidence arm_observed was read from
+kernels           the evidence arm_observed was read from: the custom-fusion
+                  computations the module contained, or the symbol resolved out
+                  of the reference's shared object
 ```
 
 **Read `arm_observed`, not `arm_requested`.** A marker no pass claims inlines
@@ -30,11 +34,18 @@ the arm ran. A pin does not owe every arm on every backend — a hash-frx family
 names the backends each of its emitters was written for — so where the two
 differ, the number belongs to `arm_observed` and the requested arm did not run.
 
+A reference arm's `arm_observed` always equals its `arm_requested`, and unlike
+on a hash-frx arm that is not a claim being made: the shared object either
+resolves the symbol or the worker fails, so there is no substitution the row
+could have to report.
+
 ```
 compile_ns        wall time to lower and compile the call once. Compile cost is
                   an axis the arms differ on — a declined region inlines its
                   whole round schedule — so an arm that wins at run time while
-                  costing more to compile is a different trade, not a free one
+                  costing more to compile is a different trade, not a free one.
+                  Null on a reference arm, which compiles nothing at run time —
+                  null rather than zero, which would read as a free compile
 ns_per_hash       the reported number: the median call time divided by batch
 ns_per_hash_min   the fastest rep, same division — the noise floor of this row
 spread            (max - min) / median across reps. A large spread is a row
@@ -61,13 +72,50 @@ roofline.bound             which ceiling the row is nearer, and so which one to
 roofline.*_probe           what each ceiling was measured with
 ```
 
-Both ceilings are **measured on the machine that ran the sweep**, through the
-same frx and the same plugin as the rows, so a fraction is a fraction of what
-this hardware and this compiler reach — not of a datasheet. A row whose
+Both ceilings are **measured on the machine that ran the sweep**, not read off
+a datasheet, and each is the rate of one frx-compiled probe: an elementwise
+streaming scale for memory, a multiply chain for arithmetic. Neither is a
+hardware roof. The streaming probe's rate moves with the number of cores it runs
+on, and native references and hash-frx's own routed kernels alike run above the
+arithmetic probe. A row that exceeds a probe gets no `bound` from it: `bound` reads
+`none (...)` and names the probe it outran, and both fractions are still
+reported, because a verdict read off a ceiling the row is already above would
+hold it to a roof that is not one. A row whose
 `bound` reads `memory (no arithmetic model declared for this hash)` has only one
 candidate ceiling because nobody has written down what that hash costs; it is
 not a claim that the hash is memory-bound. Declaring a model is one field on the
 registry row.
+
+```
+reference         null on a hash-frx arm. On a reference arm, the pinned
+                  implementation this row measured:
+
+                    revision          the tag or commit `MODULE.bazel` pins
+                    source            the upstream repository
+                    implementation    which of the upstream's implementations
+                                      the build selected
+                    library           the shared object the row was measured
+                                      through
+                    compilation_mode  the Bazel mode the whole reference was
+                                      built under — the shim and every
+                                      upstream target beneath it
+                    flags             a C shim's own copts and linkopts, or
+                                      the rustc flags the Rust reference
+                                      applies to its shim and every crate
+                                      under it, which is what decides the
+                                      upstream's packed field. Generated from
+                                      the same values the build applied
+                    runtime_dispatch  what the loaded library reports about
+                                      itself, where it offers an answer — some
+                                      upstreams pick their kernel from CPUID
+                                      rather than from a flag, so the flags
+                                      alone do not say what ran. Null where the
+                                      selection is entirely a build-time choice
+                    note              a caveat a reader of the row needs
+```
+
+`reference` is to a reference row what `machine.revisions` is to a hash-frx row:
+without it the number names no implementation and is comparable to nothing.
 
 ```
 method            warmup, reps, iters, the statistic, how calls were dispatched,
@@ -94,6 +142,22 @@ Two rows are comparable when they agree on `hash`, `batch`, `backend`,
 `machine.host` and every entry of `machine.revisions`. That is the whole
 comparison contract: everything else in the row is either the measurement or the
 evidence behind it.
+
+A reference row joins that contract on the same terms, with `reference.revision`
+standing in for the hash-frx entries of `machine.revisions` — its number is a
+property of that revision built with those flags, and re-pinning either produces
+a row that is not comparable to this one. Both sides are timed by the same
+`timing.measure` and divided by the same leg `Peaks`; the one field that differs
+is `method.dispatch`, because a native call returns complete and has no queue to
+block on.
+
+That holds only for rows from one sweep. Each invocation probes its own ceilings
+per leg, and run-to-run drift on a shared machine is neither small nor uniform,
+so a reference row from one run over a hash-frx row from another compares two
+machine states and reports the difference as a property of the code. Rows from
+one sweep carry a leg's `roofline.peak_bytes_per_s` exactly equal; two rows that
+differ there came from different sweeps and are not a share of one ceiling,
+whatever their revisions say.
 
 The gate this harness exists for — deleting a hand-written emitter — is the
 `generic` row meeting or beating the `routed` row at **every** batch on **both**

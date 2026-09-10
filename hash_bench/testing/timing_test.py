@@ -2,6 +2,7 @@
 """The measurement method: the dispatch shape a row's `method` block claims,
 and the statistic it reports."""
 
+import dataclasses
 from unittest import mock
 
 from absl.testing import absltest
@@ -22,29 +23,58 @@ class DispatchTest(absltest.TestCase):
             return object()
 
         self.fn = fn
-        self.enter_context(
-            mock.patch.object(
-                timing, "_block", lambda _out: setattr(self, "blocks", self.blocks + 1)
-            )
-        )
+
+    def _block(self, _out: object) -> None:
+        self.blocks += 1
 
     def test_a_preset_iters_skips_calibration(self) -> None:
         method = timing.Method(warmup=2, reps=3, iters=5)
-        timing.measure(self.fn, None, method)
+        timing.measure(self.fn, None, method, block=self._block)
         self.assertEqual(self.calls, 2 + 3 * 5)
 
     def test_each_rep_blocks_once_not_once_per_call(self) -> None:
         # Blocking per call would measure the host round trip rather than the
         # kernel on any backend with an asynchronous queue.
-        timing.measure(self.fn, None, timing.Method(warmup=2, reps=3, iters=5))
+        timing.measure(
+            self.fn, None, timing.Method(warmup=2, reps=3, iters=5), block=self._block
+        )
         self.assertEqual(self.blocks, 2 + 3)
 
     def test_the_chosen_iters_rides_in_the_method(self) -> None:
         # A row's method block has to say how many calls a rep held, or the
         # number cannot be re-derived from it.
         with mock.patch.object(timing, "calibrate", return_value=11):
-            measurement = timing.measure(self.fn, None, timing.Method(reps=1))
+            measurement = timing.measure(
+                self.fn, None, timing.Method(reps=1), block=self._block
+            )
         self.assertEqual(measurement.method.iters, 11)
+
+    def test_a_synchronous_call_waits_for_nothing(self) -> None:
+        # A native reference has returned its result by the time the call
+        # returns, so the reference arms hand `measure` a blocker that does
+        # nothing rather than one that reaches for frx.
+        timing.measure(
+            self.fn,
+            None,
+            timing.Method(warmup=1, reps=1, iters=2),
+            block=timing.block_none,
+        )
+        self.assertEqual(self.calls, 1 + 2)
+        self.assertEqual(self.blocks, 0)
+
+    def test_the_synchronous_method_differs_only_in_the_dispatch_it_claims(
+        self,
+    ) -> None:
+        # Everything a comparison between a reference row and a hash-frx row
+        # rests on has to survive the switch; only the account of the block at
+        # the end of a rep changes.
+        method = timing.Method(warmup=2, reps=3, iters=5)
+        synchronous = method.synchronous()
+        self.assertEqual(synchronous.dispatch, timing.SYNC_DISPATCH)
+        self.assertNotEqual(method.dispatch, synchronous.dispatch)
+        self.assertEqual(
+            dataclasses.replace(synchronous, dispatch=method.dispatch), method
+        )
 
 
 class StatisticTest(absltest.TestCase):
@@ -75,7 +105,9 @@ class CalibrateTest(absltest.TestCase):
 
     def _calibrate(self, ns_per_call: int, target_rep_ns: int) -> int:
         with mock.patch.object(
-            timing, "_one_rep", side_effect=lambda _fn, _x, iters: iters * ns_per_call
+            timing,
+            "_one_rep",
+            side_effect=lambda _fn, _x, iters, _block: iters * ns_per_call,
         ):
             return timing.calibrate(lambda _x: None, None, target_rep_ns)
 

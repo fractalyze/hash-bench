@@ -1,0 +1,3 @@
+# The overlay BUILD files for external sources that ship no Bazel build of
+# their own. Exported so `MODULE.bazel` can name them as `build_file`.
+exports_files(glob(["*.BUILD"]))
