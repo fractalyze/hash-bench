@@ -16,6 +16,9 @@ class PeakTest(absltest.TestCase):
         peak = roofline.memory_peak(_FAST)
         self.assertGreater(peak.bytes_per_s, 0.0)
         self.assertIn("read", peak.probe)
+        # Rows carry this text, and it has to name the probe as an
+        # frx-compiled kernel's rate: other code can stream faster.
+        self.assertIn("compiled by frx", peak.probe)
 
     def test_the_arithmetic_probe_reports_a_rate_in_the_asked_unit(self) -> None:
         import frx.numpy as fnp
@@ -24,9 +27,9 @@ class PeakTest(absltest.TestCase):
         self.assertGreater(peak.ops_per_s, 0.0)
         self.assertEqual(peak.unit, "u32_mul")
         self.assertIn("uint32", peak.probe)
-        # The probe is frx's multiply rate, not the machine's, and the text a
-        # row carries has to say so: a native reference can run above it.
-        self.assertIn("frx", peak.probe)
+        # The probe is one frx-compiled multiply chain's rate, and the text a
+        # row carries has to say so: other code can run above it.
+        self.assertIn("compiled by frx", peak.probe)
 
     def test_a_leg_measures_every_unit_its_rows_declare(self) -> None:
         import frx.numpy as fnp
@@ -110,13 +113,16 @@ class FractionTest(absltest.TestCase):
         self.assertEqual(block["bound"], "memory")
 
     def test_a_row_above_the_arithmetic_probe_gets_no_bound_from_it(self) -> None:
-        # A reference compiled natively can outrun frx's multiply rate; a
-        # verdict read off that rate would hold the row to a roof it is above.
+        # Native references and hash-frx's own routed kernels both outrun the
+        # multiply-chain probe; a verdict read off it would hold the row to a
+        # roof it is already above.
         block = roofline.fractions(10.0, 4500.0, self.memory, self.arith)
         self.assertAlmostEqual(block["arith_fraction"], 4.5)
         self.assertTrue(block["bound"].startswith("none"))
         self.assertIn("arithmetic", block["bound"])
-        self.assertIn("frx", block["bound"])
+        # The reason names a probe's rate, never a hardware roof.
+        self.assertIn("frx-compiled", block["bound"])
+        self.assertNotIn("machine", block["bound"])
 
     def test_a_row_above_the_memory_probe_gets_no_bound_either(self) -> None:
         # A batch small enough to live in cache moves bytes faster than a probe

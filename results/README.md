@@ -73,11 +73,11 @@ roofline.*_probe           what each ceiling was measured with
 ```
 
 Both ceilings are **measured on the machine that ran the sweep**, not read off
-a datasheet, and they are two different kinds of roof. The memory probe streams
-an array no cache holds, so it stands for this machine's DRAM bandwidth. The
-arithmetic probe is a multiply chain compiled by frx, so it is frx's multiply
-rate — a compiler's roof, not the hardware's — and a native reference can run
-above it. A row that exceeds a probe gets no `bound` from it: `bound` reads
+a datasheet, and each is the rate of one frx-compiled probe: an elementwise
+streaming scale for memory, a multiply chain for arithmetic. Neither is a
+hardware roof. The streaming probe's rate moves with the number of cores it runs
+on, and native references and hash-frx's own routed kernels alike run above the
+arithmetic probe. A row that exceeds a probe gets no `bound` from it: `bound` reads
 `none (...)` and names the probe it outran, and both fractions are still
 reported, because a verdict read off a ceiling the row is already above would
 hold it to a roof that is not one. A row whose

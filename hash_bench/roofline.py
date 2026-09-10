@@ -3,9 +3,12 @@
 that runs the sweep.
 
 A spec-sheet peak would make the fraction a property of the datasheet rather
-than of this machine and this compiler, and the fraction is the whole point: it
-says how much of what the hardware can do the arm reached. So both ceilings come
-from probes compiled through the same frx and the same plugin as the rows.
+than of this machine and this compiler, so both ceilings come from probes
+compiled through the same frx and the same plugin as the rows. That makes each
+ceiling the rate of one frx-compiled probe, not a hardware roof: a fraction
+compares a row with one streaming kernel and one multiply chain on this
+machine, and other code — hash-frx's own emitters included — can run above
+either.
 
 - **Memory.** An elementwise scale over a large array — one read and one write
   per element, no reuse — is the streaming ceiling.
@@ -115,7 +118,7 @@ def memory_peak(method: timing.Method | None = None) -> MemoryPeak:
         bytes_per_s=traffic / (m.ns_per_call * 1e-9),
         probe=(
             f"elementwise uint32 scale over {_MEMORY_PROBE_ELEMENTS} elements, "
-            "traffic counted as one read plus one write"
+            "traffic counted as one read plus one write, compiled by frx"
         ),
     )
 
@@ -163,10 +166,11 @@ def measure_peaks(
     return Peaks(memory=memory_peak(method), arith=arith)
 
 
-# Why a probe a row outruns stops being a ceiling for that row, per probe.
+# Why a probe a row outruns stops being a ceiling for that row: each is the
+# rate of one frx-compiled kernel, which other code can beat.
 _OUTRUN = {
-    "memory": "the memory probe streams an array no cache holds",
-    "arithmetic": "the arithmetic probe is frx's multiply rate, not the machine's",
+    "memory": "the memory probe is one frx-compiled streaming kernel's rate",
+    "arithmetic": "the arithmetic probe is one frx-compiled multiply chain's rate",
 }
 
 
