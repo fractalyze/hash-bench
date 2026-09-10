@@ -3,10 +3,11 @@
 #
 # The flags are not incidental. "SOTA on CPU" is a claim about the best these
 # codebases do on this machine, and every one of them reaches that only through
-# an instruction set the compiler has to be told about (or, for OpenSSL, through
-# a runtime dispatch that has to find the assembly linked in). A reference built
-# at defaults would be a slower program wearing the same name, so the flag set
-# rides into the row beside the revision.
+# an optimised build and an instruction set the compiler has to be told about
+# (or, for OpenSSL, through a runtime dispatch that has to find the assembly
+# linked in). A reference built at defaults would be a slower program wearing
+# the same name, so the build settings ride into the row beside the revision;
+# `defs.bzl` applies them to each upstream, not only to the shim.
 
 load("@rules_cc//cc:defs.bzl", "cc_library")
 load(":defs.bzl", "reference_shim", "rust_reference_shim")
@@ -56,7 +57,7 @@ reference_shim(
     linkopts = OPENMP,
     note = (
         "The upstream dispatches on CPUID rather than on a compile flag, so " +
-        "the copts here do not name the kernel that ran; the row's " +
+        "the flags here do not name the kernel that ran; the row's " +
         "runtime_dispatch carries what the loaded library reports."
     ),
     revision = "1.8.2",
@@ -74,11 +75,10 @@ reference_shim(
     copts = BASE_COPTS,
     linkopts = OPENMP,
     note = (
-        "Not the EVP interface, which reaches the same assembly core through " +
-        "a provider: its per-digest algorithm refcounts and provider context " +
-        "are contended, and an EVP shim across 24 threads measured slower " +
-        "than the same work on one thread at every batch. The row is meant " +
-        "to be OpenSSL's SHA-256, not OpenSSL's dispatch machinery."
+        "The one-shot SHA256() rather than EVP: EVP reaches the same assembly " +
+        "core through a provider and wraps each digest in per-message " +
+        "bookkeeping, so an EVP row would measure OpenSSL's dispatch rather " +
+        "than its SHA-256."
     ),
     revision = "openssl-4.0.1",
     source = "https://github.com/openssl/openssl",
@@ -90,10 +90,10 @@ reference_shim(
 )
 
 # Plonky3 selects its packed field on `target_feature` rather than at run time,
-# so these flags are what decides whether this row measures the AVX-512 backend
-# or the scalar one — which is why the shim reports back which it got.
+# in its own crates. `rust_reference_shim` hands these to the reference build's
+# transition, which applies them to every crate the shim links, and the shim
+# reports back the packing width those crates resolved.
 PLONKY3_RUSTC_FLAGS = [
-    "-Copt-level=3",
     "-Ctarget-feature=+avx512f,+avx512vl,+avx512bw,+avx512dq",
 ]
 

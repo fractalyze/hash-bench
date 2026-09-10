@@ -50,6 +50,10 @@ class ProvenanceTest(parameterized.TestCase):
         self.assertNotEmpty(provenance.source)
         self.assertNotEmpty(provenance.implementation)
         self.assertNotEmpty(provenance.flags)
+        # The upstream is compared with an optimised hash-frx wheel, so a
+        # reference whose build does not name an optimised mode is measuring
+        # a debug-grade program under the upstream's name.
+        self.assertEqual(provenance.compilation_mode, "opt")
 
     @parameterized.named_parameters(*_pairs())
     def test_covered_hash_is_in_the_registry(self, name: str, hash_name: str) -> None:

@@ -117,4 +117,7 @@ The reference implementations are pinned there too: BLAKE3 and OpenSSL through
 the Bazel Central Registry, XKCP at a commit with the overlay in `third_party/`
 because it ships no Bazel build. `hash_bench/reference/BUILD.bazel` is where the
 flags each one is compiled with live, and it is the single source for both the
-compile and the provenance a row carries.
+compile and the provenance a row carries. `hash_bench/reference/defs.bzl` builds
+every reference through one transition, so the optimised compilation mode — and,
+for Plonky3, the target features — reach the pinned upstream and not only the
+shim over it.

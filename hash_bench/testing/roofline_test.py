@@ -24,6 +24,9 @@ class PeakTest(absltest.TestCase):
         self.assertGreater(peak.ops_per_s, 0.0)
         self.assertEqual(peak.unit, "u32_mul")
         self.assertIn("uint32", peak.probe)
+        # The probe is frx's multiply rate, not the machine's, and the text a
+        # row carries has to say so: a native reference can run above it.
+        self.assertIn("frx", peak.probe)
 
     def test_a_leg_measures_every_unit_its_rows_declare(self) -> None:
         import frx.numpy as fnp
@@ -105,6 +108,27 @@ class FractionTest(absltest.TestCase):
     def test_a_streaming_row_binds_on_memory(self) -> None:
         block = roofline.fractions(90.0, 100.0, self.memory, self.arith)
         self.assertEqual(block["bound"], "memory")
+
+    def test_a_row_above_the_arithmetic_probe_gets_no_bound_from_it(self) -> None:
+        # A reference compiled natively can outrun frx's multiply rate; a
+        # verdict read off that rate would hold the row to a roof it is above.
+        block = roofline.fractions(10.0, 4500.0, self.memory, self.arith)
+        self.assertAlmostEqual(block["arith_fraction"], 4.5)
+        self.assertTrue(block["bound"].startswith("none"))
+        self.assertIn("arithmetic", block["bound"])
+        self.assertIn("frx", block["bound"])
+
+    def test_a_row_above_the_memory_probe_gets_no_bound_either(self) -> None:
+        # A batch small enough to live in cache moves bytes faster than a probe
+        # that streams past every cache, with or without an arithmetic model.
+        block = roofline.fractions(150.0, None, self.memory, None)
+        self.assertAlmostEqual(block["memory_fraction"], 1.5)
+        self.assertTrue(block["bound"].startswith("none"))
+        self.assertIn("memory", block["bound"])
+
+    def test_a_row_under_both_probes_still_gets_its_verdict(self) -> None:
+        block = roofline.fractions(10.0, 999.0, self.memory, self.arith)
+        self.assertEqual(block["bound"], "arithmetic")
 
     def test_both_fractions_are_kept_whichever_binds(self) -> None:
         block = roofline.fractions(10.0, 900.0, self.memory, self.arith)

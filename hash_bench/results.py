@@ -37,7 +37,7 @@ class Row:
     # more to compile is a different trade, not a free one.
     #
     # Null on a reference arm, which has no run-time compile: the flags that
-    # built it are in `reference.copts` and were paid at build time. Null rather
+    # built it are in `reference.flags` and were paid at build time. Null rather
     # than zero, because zero would read as a compile that cost nothing.
     compile_ns: int | None
     ns_per_hash: float
@@ -109,6 +109,10 @@ def _compile_cell(row: dict[str, Any]) -> str:
 def _roofline_cell(row: dict[str, Any]) -> str:
     rl = row["roofline"]
     bound = rl["bound"].split(" ")[0]
+    if bound == "none":
+        # The row outran a probe, so there is no roof to quote a share of; the
+        # file's `bound` says which probe and why.
+        return "above a probe"
     fraction = rl["arith_fraction"] if bound == "arithmetic" else rl["memory_fraction"]
     return f"{fraction * 100:.1f}% of {bound}"
 

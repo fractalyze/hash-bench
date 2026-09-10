@@ -1,11 +1,22 @@
 """A reference implementation as the harness loads it: a shared object plus the
 provenance of what went into it.
 
-The provenance is generated from the SAME flag list the shim is compiled with,
-so "which flags produced this number" is answered by the build rather than by a
-parallel claim in a comment or a Python table. That is the same argument
+The provenance is generated from the SAME values the build applies, so "which
+flags produced this number" is answered by the build rather than by a parallel
+claim in a comment, a `.bazelrc` or a Python table. That is the same argument
 `arms.py` makes for reading the compiled module instead of trusting the request:
 a recorded flag that nothing compiled with is not evidence.
+
+Every reference is built through one transition, which is where the settings
+that have to reach the UPSTREAM — not just the shim — are applied. Two do:
+
+- The compilation mode. A shim's copts reach the shim alone, so under Bazel's
+  default mode the pinned upstream beneath it compiles unoptimised, while the
+  hash-frx side it is compared with arrives as an optimised wheel.
+- The Rust reference's target features. `target_feature` is read when each
+  crate compiles, and the packed field Plonky3 uses is resolved in its own
+  crates, so features set on the shim alone leave the shim compiling against a
+  scalar packing.
 
 A shared object rather than a Python extension because the harness reaches it
 through `ctypes` and needs no interpreter API — the entry points take pointers
@@ -20,6 +31,43 @@ rather than assuming one.
 load("@bazel_skylib//rules:write_file.bzl", "write_file")
 load("@rules_cc//cc:defs.bzl", "cc_binary")
 load("@rules_rust//rust:defs.bzl", "rust_shared_library")
+
+# One value, read by the transition and written into the provenance.
+_COMPILATION_MODE = "opt"
+
+_COMPILATION_MODE_SETTING = "//command_line_option:compilation_mode"
+_RUSTC_FLAGS_SETTING = "@rules_rust//rust/settings:extra_rustc_flags"
+
+def _reference_build_impl(_settings, attr):
+    return {
+        _COMPILATION_MODE_SETTING: _COMPILATION_MODE,
+        _RUSTC_FLAGS_SETTING: attr.rustc_flags,
+    }
+
+_reference_build = transition(
+    implementation = _reference_build_impl,
+    inputs = [],
+    outputs = [_COMPILATION_MODE_SETTING, _RUSTC_FLAGS_SETTING],
+)
+
+def _reference_library_impl(ctx):
+    library = ctx.attr.library
+    if type(library) == "list":
+        library = library[0]
+    return [DefaultInfo(files = library[DefaultInfo].files)]
+
+# The shared object, rebuilt under `_reference_build` together with everything
+# it links.
+_reference_library = rule(
+    implementation = _reference_library_impl,
+    attrs = {
+        "library": attr.label(cfg = _reference_build, mandatory = True),
+        "rustc_flags": attr.string_list(),
+        "_allowlist_function_transition": attr.label(
+            default = "@bazel_tools//tools/allowlists/function_transition_allowlist",
+        ),
+    },
+)
 
 def _applied_once(flags):
     """`flags` with repeats dropped, in first-use order.
@@ -42,12 +90,20 @@ def _bundle(
         revision,
         source,
         implementation,
-        note):
+        note,
+        rustc_flags = []):
     """The provenance JSON for one library, and the filegroup the harness loads.
 
     `library_target` builds it and `library_file` is what it lands as — the two
     differ for the Rust rule, which derives its own `lib<target>.so`.
+    `rustc_flags` go to the transition, which applies them to every crate.
     """
+    built = "%s_library" % name
+    _reference_library(
+        name = built,
+        library = ":" + library_target,
+        rustc_flags = rustc_flags,
+    )
     provenance = "%s.provenance.json" % name
     write_file(
         name = "%s_provenance" % name,
@@ -58,6 +114,7 @@ def _bundle(
             "revision": revision,
             "source": source,
             "implementation": implementation,
+            "compilation_mode": _COMPILATION_MODE,
             "flags": _applied_once(flags),
             "note": note,
         })],
@@ -65,7 +122,7 @@ def _bundle(
     native.filegroup(
         name = name,
         srcs = [
-            ":" + library_target,
+            ":" + built,
             provenance,
         ],
         visibility = ["//visibility:public"],
@@ -87,7 +144,9 @@ def reference_shim(
       name: the reference's arm name, as it appears in a row.
       srcs: the shim translation units.
       deps: the pinned upstream `cc_library` targets.
-      copts: compile flags for the shim; recorded verbatim in the provenance.
+      copts: compile flags for the shim alone; recorded verbatim in the
+        provenance. The upstream's optimisation comes from the transition's
+        compilation mode, not from these.
       revision: the upstream revision the pin resolves to — a tag or a commit.
       source: the upstream repository URL.
       implementation: which of the upstream's implementations this selects.
@@ -130,9 +189,9 @@ def rust_reference_shim(
       name: the reference's arm name, as it appears in a row.
       srcs: the shim's Rust sources.
       deps: the pinned upstream crates.
-      rustc_flags: flags for the shim; recorded verbatim in the provenance.
-        Unlike a C shim's copts these also decide which backend the upstream
-        compiles in, the packed-field selection being a `target_feature` gate.
+      rustc_flags: flags the transition applies to the shim and every crate
+        under it; recorded verbatim in the provenance. They reach the upstream
+        crates, which is what decides the packed field they compile in.
       revision: the crate version the pin resolves to.
       source: the upstream repository URL.
       implementation: which of the upstream's implementations this selects.
@@ -144,7 +203,6 @@ def rust_reference_shim(
         name = shim,
         srcs = srcs,
         edition = edition,
-        rustc_flags = rustc_flags,
         deps = deps,
     )
     _bundle(
@@ -156,4 +214,5 @@ def rust_reference_shim(
         source = source,
         implementation = implementation,
         note = note,
+        rustc_flags = rustc_flags,
     )

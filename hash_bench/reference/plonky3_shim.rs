@@ -19,7 +19,7 @@
 // `Poseidon2KoalaBear`'s own documentation says to use "wherever possible", and
 // the only one that reaches the packed field at all: handing it
 // `[KoalaBear; 16]` compiles and computes the right state one permutation at a
-// time, which measured ~6x slower here and is not what this reference is for.
+// time — a scalar program, which is not what this reference is for.
 //
 // Reaching it costs a transpose. A packed lane holds element `j` of `WIDTH`
 // DIFFERENT states, while the harness's array is one state per row, so each
@@ -37,7 +37,8 @@ use p3_symmetric::Permutation;
 use rayon::prelude::*;
 
 /// Plonky3's vector of KoalaBears for this target — one AVX-512 register under
-/// the flags this shim is built with, and a one-element array under none.
+/// the features the reference build applies to every crate, and a one-element
+/// array under none.
 type Packed = <KoalaBear as Field>::Packing;
 
 const WIDTH: usize = 16;

@@ -46,8 +46,8 @@ LEGS: tuple[Leg, ...] = (
         env=(
             ("OMP_NUM_THREADS", "1"),
             # The reference arms bring their own thread pools, and a pool that
-            # sized itself from the machine would put 24 threads inside a
-            # one-core mask. One knob per runtime, because they read different
+            # sized itself from the machine would put a thread per core inside
+            # a one-core mask. One knob per runtime, because they read different
             # ones: the C shims are OpenMP, Plonky3 is rayon.
             ("RAYON_NUM_THREADS", "1"),
         ),

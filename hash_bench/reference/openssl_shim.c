@@ -9,11 +9,9 @@
 // `references.py` puts the answer in the row.
 //
 // `SHA256()` rather than the EVP interface, and not for brevity. EVP reaches
-// the same assembly core through a provider, and the per-digest bookkeeping
-// that costs — algorithm refcounts and a provider context per message — is
-// contended: measured on this batch shape, an EVP shim across 24 threads was
-// slower than the same work on one thread at every batch, and ~40x slower than
-// the one-shot at a batch of 4. The row is meant to be OpenSSL's SHA-256, not
+// the same assembly core through a provider and wraps every digest in
+// per-message bookkeeping — an algorithm reference and a provider context —
+// that is no part of SHA-256. The row is meant to be OpenSSL's SHA-256, not
 // OpenSSL's dispatch machinery, so it calls the function that is only the hash.
 // `SHA256` is deprecated in the 3.0 API and still the whole of what it always
 // was; suppressing the deprecation is the cost of measuring it.

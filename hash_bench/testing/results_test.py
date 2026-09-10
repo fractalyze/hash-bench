@@ -89,6 +89,20 @@ class TableTest(absltest.TestCase):
         )
         self.assertIn("18.0% of memory", results.table([row.to_json()]))
 
+    def test_a_row_above_a_probe_quotes_no_share_of_it(self) -> None:
+        # A fraction of a probe the row outran is not a share of any roof, so
+        # the table says so instead of printing a percentage above a hundred.
+        row = _row(
+            roofline={
+                "memory_fraction": 0.06,
+                "arith_fraction": 4.5,
+                "bound": "none (exceeds the arithmetic probe: ...)",
+            }
+        )
+        rendered = results.table([row.to_json()])
+        self.assertIn("above a probe", rendered)
+        self.assertNotIn("450.0%", rendered)
+
 
 if __name__ == "__main__":
     absltest.main()

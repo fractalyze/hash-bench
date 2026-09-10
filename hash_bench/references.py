@@ -73,8 +73,8 @@ def _artifact(name: str) -> Path:
 class Provenance:
     """What the build put into one reference's shared object.
 
-    Read back from the JSON `reference_shim` generates off the same `copts` the
-    shim compiled with, so this is the build's account of itself rather than a
+    Read back from the JSON `reference/defs.bzl` generates off the same values
+    the build applied, so this is the build's account of itself rather than a
     second copy maintained by hand.
     """
 
@@ -85,14 +85,19 @@ class Provenance:
     revision: str
     source: str
     implementation: str
-    # Every flag the shim was built with. On the Rust reference these also
-    # decide which backend the upstream compiles in, its packed field being a
-    # `target_feature` gate.
+    # The Bazel compilation mode the whole reference was built under — the
+    # shim AND every upstream target beneath it. The hash-frx side arrives as
+    # an optimised wheel, so a reference built at the default mode would be an
+    # unoptimised upstream wearing the same name.
+    compilation_mode: str
+    # A C shim's own copts and linkopts, or the rustc flags the Rust reference
+    # applies to its shim and every crate under it — which is what decides the
+    # upstream's packed field, a `target_feature` gate read per crate.
     flags: tuple[str, ...]
     note: str | None
     # What the loaded library says about itself at run time, where it offers an
     # answer. Several of these upstreams select their kernel from CPUID rather
-    # than from a compile flag, so the copts alone do not say what ran; this is
+    # than from a compile flag, so the flags alone do not say what ran; this is
     # asked of the process that is about to produce the rows. None where the
     # upstream's selection is entirely a build-time choice.
     runtime_dispatch: str | None = None
@@ -147,6 +152,7 @@ class Reference:
             revision=payload["revision"],
             source=payload["source"],
             implementation=payload["implementation"],
+            compilation_mode=payload["compilation_mode"],
             flags=tuple(payload["flags"]),
             note=payload["note"],
             runtime_dispatch=self._runtime_dispatch(),
