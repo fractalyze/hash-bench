@@ -8,7 +8,7 @@ claim in a comment, a `.bazelrc` or a Python table. That is the same argument
 a recorded flag that nothing compiled with is not evidence.
 
 Every reference is built through one transition, which is where the settings
-that have to reach the UPSTREAM — not just the shim — are applied. Two do:
+that have to reach the UPSTREAM — not just the shim — are applied. Three do:
 
 - The compilation mode. A shim's copts reach the shim alone, so under Bazel's
   default mode the pinned upstream beneath it compiles unoptimised, while the
@@ -17,10 +17,15 @@ that have to reach the UPSTREAM — not just the shim — are applied. Two do:
   crate compiles, and the packed field Plonky3 uses is resolved in its own
   crates, so features set on the shim alone leave the shim compiling against a
   scalar packing.
+- A CUDA reference's target architectures. rules_cuda reads them from one
+  setting for every CUDA target, so the build otherwise compiles for whatever
+  the command line said, and a kernel built for another architecture runs
+  JIT-compiled PTX rather than the code nvcc produced.
 
 A shared object rather than a Python extension because the harness reaches it
 through `ctypes` and needs no interpreter API — the entry points take pointers
-and lengths, and `references.py` hands them numpy buffers.
+and lengths, and `references.py` hands them numpy buffers or, for a CUDA
+reference, device buffers the shim allocated.
 
 The provenance also names the library file it describes, which is what lets a
 reference be built by whichever rule suits its language: the C shims produce
@@ -30,24 +35,32 @@ rather than assuming one.
 
 load("@bazel_skylib//rules:write_file.bzl", "write_file")
 load("@rules_cc//cc:defs.bzl", "cc_binary")
+load("@rules_cuda//cuda:defs.bzl", "cuda_library")
 load("@rules_rust//rust:defs.bzl", "rust_shared_library")
 
 # One value, read by the transition and written into the provenance.
 _COMPILATION_MODE = "opt"
 
 _COMPILATION_MODE_SETTING = "//command_line_option:compilation_mode"
+_CUDA_ARCHS_SETTING = "@rules_cuda//cuda:archs"
 _RUSTC_FLAGS_SETTING = "@rules_rust//rust/settings:extra_rustc_flags"
 
-def _reference_build_impl(_settings, attr):
+def _reference_build_impl(settings, attr):
     return {
         _COMPILATION_MODE_SETTING: _COMPILATION_MODE,
+        # A reference that compiles no CUDA keeps the incoming value.
+        _CUDA_ARCHS_SETTING: attr.cuda_archs or settings[_CUDA_ARCHS_SETTING],
         _RUSTC_FLAGS_SETTING: attr.rustc_flags,
     }
 
 _reference_build = transition(
     implementation = _reference_build_impl,
-    inputs = [],
-    outputs = [_COMPILATION_MODE_SETTING, _RUSTC_FLAGS_SETTING],
+    inputs = [_CUDA_ARCHS_SETTING],
+    outputs = [
+        _COMPILATION_MODE_SETTING,
+        _CUDA_ARCHS_SETTING,
+        _RUSTC_FLAGS_SETTING,
+    ],
 )
 
 def _reference_library_impl(ctx):
@@ -62,6 +75,7 @@ _reference_library = rule(
     implementation = _reference_library_impl,
     attrs = {
         "library": attr.label(cfg = _reference_build, mandatory = True),
+        "cuda_archs": attr.string(),
         "rustc_flags": attr.string_list(),
         "_allowlist_function_transition": attr.label(
             default = "@bazel_tools//tools/allowlists/function_transition_allowlist",
@@ -91,17 +105,21 @@ def _bundle(
         source,
         implementation,
         note,
-        rustc_flags = []):
+        rustc_flags = [],
+        cuda_archs = "",
+        patches = []):
     """The provenance JSON for one library, and the filegroup the harness loads.
 
     `library_target` builds it and `library_file` is what it lands as — the two
     differ for the Rust rule, which derives its own `lib<target>.so`.
-    `rustc_flags` go to the transition, which applies them to every crate.
+    `rustc_flags` and `cuda_archs` go to the transition, which applies them to
+    everything the library is built from.
     """
     built = "%s_library" % name
     _reference_library(
         name = built,
         library = ":" + library_target,
+        cuda_archs = cuda_archs,
         rustc_flags = rustc_flags,
     )
     provenance = "%s.provenance.json" % name
@@ -116,6 +134,7 @@ def _bundle(
             "implementation": implementation,
             "compilation_mode": _COMPILATION_MODE,
             "flags": _applied_once(flags),
+            "patches": patches,
             "note": note,
         })],
     )
@@ -215,4 +234,60 @@ def rust_reference_shim(
         implementation = implementation,
         note = note,
         rustc_flags = rustc_flags,
+    )
+
+def cuda_reference_shim(
+        name,
+        srcs,
+        deps,
+        copts,
+        cuda_archs,
+        revision,
+        source,
+        implementation,
+        patches = [],
+        note = None):
+    """The same, for a reference whose upstream is CUDA.
+
+    Args:
+      name: the reference's arm name, as it appears in a row.
+      srcs: the shim's kernel translation units.
+      deps: the pinned upstream targets and the device-buffer ABI (`:gpu`).
+      copts: nvcc flags for the shim; recorded verbatim in the provenance.
+      cuda_archs: the architectures the transition compiles every CUDA target
+        for, in rules_cuda's spelling; recorded as the setting it applies.
+      revision: the upstream revision the pin resolves to — a tag or a commit.
+      source: the upstream repository URL.
+      implementation: which of the upstream's implementations this selects.
+      patches: the patches `MODULE.bazel` applies to the upstream, so that a row
+        names what it measured beyond the revision.
+      note: a caveat a reader of the row needs, or None.
+    """
+    kernel = "%s_kernel" % name
+    cuda_library(
+        name = kernel,
+        srcs = srcs,
+        copts = copts,
+        # Nothing in the shared object calls the entry points; `ctypes` does,
+        # so without this the linker is free to drop them.
+        alwayslink = True,
+        deps = deps,
+    )
+    library = "lib%s.so" % name
+    cc_binary(
+        name = library,
+        linkshared = True,
+        deps = [":" + kernel],
+    )
+    _bundle(
+        name = name,
+        library_target = library,
+        library_file = library,
+        flags = copts + ["--%s=%s" % (_CUDA_ARCHS_SETTING, cuda_archs)],
+        revision = revision,
+        source = source,
+        implementation = implementation,
+        note = note,
+        cuda_archs = cuda_archs,
+        patches = patches,
     )

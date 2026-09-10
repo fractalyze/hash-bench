@@ -15,7 +15,7 @@ import sys
 
 from absl.testing import absltest, parameterized
 
-from hash_bench import arms, references, registry, results, sweep
+from hash_bench import arms, backends, references, registry, results, sweep
 
 # The shortest settings that still produce a row: one warmup, one rep, and a rep
 # target low enough that calibration stops at a handful of calls.
@@ -46,13 +46,16 @@ def _sweep(*extra: str) -> list[dict]:
 
 
 def _arms_over(hash_name: str) -> list[str]:
-    """Every arm a default sweep runs over one hash: all three hash-frx
-    lowerings, plus each reference that implements it. Read off the tables
-    rather than written down, because a reference covers what its codebase
-    covers."""
-    return [a.value for a in arms.Arm] + [
-        name for name in references.names() if references.get(name).covers(hash_name)
+    """Every arm a default sweep runs over one hash on this suite's leg: all
+    three hash-frx lowerings, plus each reference that implements it and runs
+    there. Read off the tables rather than written down, because a reference
+    covers what its codebase covers."""
+    offered = [
+        ref.name
+        for ref in map(references.get, references.names())
+        if ref.covers(hash_name) and _LEG in ref.legs
     ]
+    return [a.value for a in arms.Arm] + offered
 
 
 class DriverTest(absltest.TestCase):
@@ -164,6 +167,24 @@ class DriverTest(absltest.TestCase):
         flags = row["machine"]["env"]["XLA_FLAGS"]
         for pass_name in (*arms.RECOGNIZER_PASSES, arms.LOOP_CONVERSION_PASS):
             self.assertIn(pass_name, flags)
+
+
+class OfferedTest(absltest.TestCase):
+    def test_a_reference_is_offered_only_on_the_legs_its_code_targets(self) -> None:
+        # A CUDA reference on a CPU leg would have no device to run on, and a
+        # CPU reference on the GPU leg would put a CPU number in the GPU table.
+        self.assertTrue(sweep._offered("openvm", "gpu"))
+        self.assertFalse(sweep._offered("plonky3", "gpu"))
+        for leg in ("cpu-1core", "cpu"):
+            self.assertTrue(sweep._offered("plonky3", leg))
+            self.assertFalse(sweep._offered("openvm", leg))
+
+    def test_a_hash_frx_arm_is_offered_on_every_leg(self) -> None:
+        # Where the pin cannot reach an arm, the row reports the substitution;
+        # filtering the arm out would hide it.
+        for arm in arms.Arm:
+            for leg in backends.names():
+                self.assertTrue(sweep._offered(arm.value, leg))
 
 
 class CeilingTest(absltest.TestCase):

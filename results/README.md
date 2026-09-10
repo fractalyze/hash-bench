@@ -99,18 +99,27 @@ reference         null on a hash-frx arm. On a reference arm, the pinned
                     compilation_mode  the Bazel mode the whole reference was
                                       built under — the shim and every
                                       upstream target beneath it
-                    flags             a C shim's own copts and linkopts, or
-                                      the rustc flags the Rust reference
-                                      applies to its shim and every crate
-                                      under it, which is what decides the
-                                      upstream's packed field. Generated from
-                                      the same values the build applied
+                    flags             a C shim's own copts and linkopts, the
+                                      rustc flags the Rust reference applies
+                                      to its shim and every crate under it
+                                      (which is what decides the upstream's
+                                      packed field), or a CUDA shim's nvcc
+                                      flags and the rules_cuda architectures
+                                      setting it was built under. Generated
+                                      from the same values the build applied
+                    patches           the patches applied to the pinned
+                                      upstream before it compiled; empty for
+                                      an upstream measured as released
                     runtime_dispatch  what the loaded library reports about
                                       itself, where it offers an answer — some
                                       upstreams pick their kernel from CPUID
                                       rather than from a flag, so the flags
-                                      alone do not say what ran. Null where the
-                                      selection is entirely a build-time choice
+                                      alone do not say what ran; a CUDA shim
+                                      reports the nvcc and architectures its
+                                      kernel was compiled with and the device,
+                                      driver and runtime it found. Null where
+                                      the selection is entirely a build-time
+                                      choice
                     note              a caveat a reader of the row needs
 ```
 
@@ -147,9 +156,11 @@ A reference row joins that contract on the same terms, with `reference.revision`
 standing in for the hash-frx entries of `machine.revisions` — its number is a
 property of that revision built with those flags, and re-pinning either produces
 a row that is not comparable to this one. Both sides are timed by the same
-`timing.measure` and divided by the same leg `Peaks`; the one field that differs
-is `method.dispatch`, because a native call returns complete and has no queue to
-block on.
+`timing.measure` and divided by the same leg `Peaks`. On a CPU reference the one
+field that differs is `method.dispatch`, because a native call returns complete
+and has no queue to block on; a CUDA reference launches asynchronously, as
+hash-frx does on the GPU, and its method matches the hash-frx rows' exactly,
+with a stream synchronize as the block.
 
 That holds only for rows from one sweep. Each invocation probes its own ceilings
 per leg, and run-to-run drift on a shared machine is neither small nor uniform,

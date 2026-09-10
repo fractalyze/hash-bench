@@ -9,7 +9,13 @@ References are pinned as external dependencies at fixed revisions, not vendored
 copies:
 
 - CPU: XKCP, the official BLAKE3 implementation, OpenSSL (SHA-NI path), Plonky3
-- GPU: ICICLE, sppark, Plonky3-CUDA, hashcat where it applies
+- GPU: OpenVM's KoalaBear Poseidon2 kernel, for Poseidon2 only
+
+Keccak-f / SHA-3, SHA-256 and BLAKE3 have no GPU reference. None of the
+public CUDA candidates is open-source, byte-identical to the row it would be
+compared with, and callable as a library: ICICLE's CUDA backend is closed and
+licence-gated, sppark has no hash kernels, and hashcat's kernels hash its own
+password candidates rather than a caller's messages.
 
 The harness is the gate for every hand-written hash emitter deletion in hash-frx
 and xla: an emitter goes only after the generic path measures at or above it at
@@ -40,10 +46,12 @@ the same time. The summary table goes to stderr, and `--quiet` drops it.
 `results/README.md` documents every field; the short version is that a row is
 self-contained, and `arm_observed` — not `arm_requested` — says what ran.
 
-`bazel test //...` is the harness's own suite, and it runs on CPU only: it
+`bazel test //...` is the harness's own suite, and it runs frx on CPU only: it
 asserts that rows are produced, classified and modelled correctly, and it
 measures nothing anyone should quote. GPU routing is exercised by running the
-sweep, not by the suite.
+sweep, not by the suite. The one exception is the CUDA reference's byte check,
+which runs the kernel on the device beside hash-frx's CPU output and is skipped,
+visibly, on a host with no device.
 
 ## The three arms
 
@@ -79,6 +87,7 @@ between them is one measurement apart rather than one harness apart.
 | `blake3` | `blake3` | the BLAKE3 team's reference C implementation |
 | `openssl` | `sha256` | libcrypto's SHA-256, which branches to SHA-NI on CPUID |
 | `plonky3` | `poseidon2-koalabear16` | Plonky3's own Poseidon2, on its AVX-512 packed field |
+| `openvm` | `poseidon2-koalabear16` | OpenVM's CUDA kernel for Plonky3's Poseidon2, with Plonky3 0.7.0's constants patched in |
 
 Each is a pinned external dependency at a fixed revision rather than a vendored
 copy, and each row carries that revision, the upstream implementation the build
@@ -88,8 +97,10 @@ Where an upstream picks its kernel at run time instead, the row carries what the
 loaded library reports about itself.
 
 A reference covers the hashes its codebase implements and no others, and runs on
-the CPU legs only: these are the CPU frontier, and a GPU reference is a
-different set of codebases and a different pin.
+the legs its code targets: the CPU references on both CPU legs, `openvm` on the
+GPU leg. A CUDA reference keeps its batch in device memory and is timed the way
+a hash-frx GPU row is — launches dispatched back to back, one stream
+synchronize at the end of a rep — so neither side pays a copy the other skips.
 
 `hash_bench/testing/references_test.py` runs both sides of every
 (reference, hash) pair over the same input and asserts the bytes are equal.
@@ -114,8 +125,12 @@ carries the reason. Bumping the commit means copying that commit's lock over
 ours.
 
 The reference implementations are pinned there too: BLAKE3 and OpenSSL through
-the Bazel Central Registry, XKCP at a commit with the overlay in `third_party/`
-because it ships no Bazel build. `hash_bench/reference/BUILD.bazel` is where the
+the Bazel Central Registry, XKCP and OpenVM at a commit with overlays in
+`third_party/` because neither ships a Bazel build. OpenVM also carries a patch
+there that swaps two of its constant tables for Plonky3 0.7.0's, and the row
+names it. The CUDA toolkit that compiles the GPU reference is pinned too: a
+release of NVIDIA's redistributable archive, fetched by `rules_cuda`, rather
+than the host's nvcc. `hash_bench/reference/BUILD.bazel` is where the
 flags each one is compiled with live, and it is the single source for both the
 compile and the provenance a row carries. `hash_bench/reference/defs.bzl` builds
 every reference through one transition, so the optimised compilation mode — and,

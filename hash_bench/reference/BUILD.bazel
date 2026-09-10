@@ -1,5 +1,5 @@
-# The CPU reference implementations, each compiled from the revision
-# `MODULE.bazel` pins and each recording the flags it was compiled with.
+# The reference implementations, each compiled from the revision `MODULE.bazel`
+# pins and each recording the flags it was compiled with.
 #
 # The flags are not incidental. "SOTA on CPU" is a claim about the best these
 # codebases do on this machine, and every one of them reaches that only through
@@ -10,7 +10,8 @@
 # `defs.bzl` applies them to each upstream, not only to the shim.
 
 load("@rules_cc//cc:defs.bzl", "cc_library")
-load(":defs.bzl", "reference_shim", "rust_reference_shim")
+load("@rules_cuda//cuda:defs.bzl", "cuda_library")
+load(":defs.bzl", "cuda_reference_shim", "reference_shim", "rust_reference_shim")
 
 # Every shim parallelises its batch with OpenMP, so the reference reaches every
 # core on the `cpu` leg the way hash-frx's row reaches them through the XLA
@@ -115,4 +116,47 @@ rust_reference_shim(
         "@hash_bench_crates//:rayon",
     ],
     implementation = "p3-koala-bear's default_koalabear_poseidon2_16, over [KoalaBear::Packing; 16] — the packed field the target features select",
+)
+
+# The GPU references. Each keeps its batch in device memory through the ABI
+# `gpu.h` declares, which every CUDA shim links.
+cuda_library(
+    name = "gpu",
+    srcs = ["gpu.cu"],
+    hdrs = ["gpu.h"],
+    # `ctypes` is the only caller of the ABI's entry points.
+    alwayslink = True,
+)
+
+# SASS for the RTX 5090's sm_120 and no PTX, so the driver runs the code nvcc
+# produced instead of JIT-compiling a portable form at load.
+CUDA_ARCHS = "compute_120:sm_120"
+
+# The flags the upstream's own `cuda-builder` gives nvcc, less its fatbin
+# compression, which changes the file and not the code.
+OPENVM_NVCC_COPTS = [
+    "--std=c++17",
+    "--expt-relaxed-constexpr",
+]
+
+cuda_reference_shim(
+    name = "openvm",
+    srcs = ["openvm_shim.cu"],
+    copts = OPENVM_NVCC_COPTS,
+    cuda_archs = CUDA_ARCHS,
+    note = (
+        "The v2.0.1 tag. The patch replaces the kernel's final and internal " +
+        "round constants, which the upstream took from p3-koala-bear 0.4.1, " +
+        "with 0.7.0's, the release hash-frx computes; constants do not change " +
+        "the work. The kernel is the upstream benchmark's, reading one buffer " +
+        "and writing another where the benchmark permutes in place."
+    ),
+    patches = ["//third_party:openvm_poseidon2_kb_plonky3_0_7_0.patch"],
+    revision = "362c7ad8c6b042b320471a137e3eadec7ec69a44",
+    source = "https://github.com/openvm-org/stark-backend",
+    deps = [
+        ":gpu",
+        "@openvm_stark_backend//:poseidon2_koalabear",
+    ],
+    implementation = "benchmarks/fields/cuda koala_bear/poseidon2_kb.cuh — kb_poseidon2::poseidon2_mix, one thread per state",
 )

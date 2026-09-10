@@ -41,6 +41,7 @@ py_library(
         # data rather than deps: nothing here links against them.
         "//hash_bench/reference:blake3",
         "//hash_bench/reference:openssl",
+        "//hash_bench/reference:openvm",
         "//hash_bench/reference:plonky3",
         "//hash_bench/reference:xkcp",
     ],

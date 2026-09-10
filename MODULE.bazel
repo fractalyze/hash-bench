@@ -88,6 +88,39 @@ crate.spec(
 crate.from_specs(name = "hash_bench_crates")
 use_repo(crate, "hash_bench_crates")
 
+# The GPU references are CUDA, compiled by a toolkit fetched from NVIDIA's
+# redistributable archive at a fixed release rather than by whichever nvcc the
+# host has installed: a kernel built by another nvcc is a different program, so
+# the toolkit is pinned the way every upstream revision is.
+bazel_dep(name = "rules_cuda", version = "0.3.0")
+
+cuda = use_extension("@rules_cuda//cuda:extensions.bzl", "toolchain")
+cuda.redist_json(
+    name = "cuda_redist",
+    components = [
+        "cccl",
+        "cudart",
+        "nvcc",
+    ],
+    version = "12.9.1",
+)
+cuda.toolkit(name = "cuda")
+use_repo(cuda, "cuda")
+
+# OpenVM's KoalaBear Poseidon2 kernel, the GPU reference for Poseidon2, at the
+# v2.0.1 tag's commit. The patch moves its constants to p3-koala-bear 0.7.0, the
+# release hash-frx computes; the `openvm` note in hash_bench/reference/BUILD.bazel,
+# which every row carries, says what it changes and why the work does not.
+http_archive(
+    name = "openvm_stark_backend",
+    build_file = "//third_party:openvm_stark_backend.BUILD",
+    integrity = "sha256-VLRmMN4Env8sW9eIBINCcH3Xv8RRmRDezyDJh8/UVvU=",
+    patch_args = ["-p1"],
+    patches = ["//third_party:openvm_poseidon2_kb_plonky3_0_7_0.patch"],
+    strip_prefix = "stark-backend-362c7ad8c6b042b320471a137e3eadec7ec69a44",
+    urls = ["https://github.com/openvm-org/stark-backend/archive/362c7ad8c6b042b320471a137e3eadec7ec69a44.tar.gz"],
+)
+
 python = use_extension("@rules_python//python/extensions:python.bzl", "python")
 python.toolchain(
     is_default = True,
