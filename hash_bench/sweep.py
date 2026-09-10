@@ -217,11 +217,12 @@ def _offered(arm: str, leg_name: str) -> bool:
 
 def orchestrate(args: argparse.Namespace) -> int:
     legs = args.backend or backends.available()
-    requested_arms = args.arm or list(all_arms())
-    unknown = [a for a in requested_arms if a not in all_arms()]
+    known_arms = all_arms()
+    requested_arms = args.arm or list(known_arms)
+    unknown = [a for a in requested_arms if a not in known_arms]
     if unknown:
         raise SystemExit(
-            f"no such arm: {', '.join(unknown)}; have {', '.join(all_arms())}"
+            f"no such arm: {', '.join(unknown)}; have {', '.join(known_arms)}"
         )
     rows: list[dict[str, Any]] = []
     if args.out:
@@ -336,7 +337,6 @@ _REFERENCE_OBSERVATION = (
 
 
 def _frx_rows(
-    args: argparse.Namespace,
     leg: backends.Leg,
     arm: arms.Arm,
     specs: list[registry.HashSpec],
@@ -371,9 +371,9 @@ def _frx_rows(
 
 
 def _reference_rows(
-    args: argparse.Namespace,
     leg: backends.Leg,
     ref: references.Reference,
+    selected: tuple[str, ...],
     batches: tuple[int, ...],
     method: timing.Method,
     peaks: roofline.Peaks,
@@ -389,7 +389,7 @@ def _reference_rows(
     """
     provenance = ref.provenance.to_json()
     method = method.synchronous()
-    for spec in references.rows(ref, tuple(args.hash)):
+    for spec in references.rows(ref, selected):
         for batch in batches:
             call = ref.call(spec, batch)
             row = _row(
@@ -428,7 +428,8 @@ def work(args: argparse.Namespace) -> int:
     method = timing.Method(
         warmup=args.warmup, reps=args.reps, target_rep_ns=args.target_rep_ns
     )
-    specs = list(registry.rows(tuple(args.hash)))
+    selected = tuple(args.hash)
+    specs = list(registry.rows(selected))
     if args.probe_peaks:
         units = [c for c in (spec.arith_ceiling() for spec in specs) if c is not None]
         print(json.dumps(roofline.measure_peaks(units, method).to_json()))
@@ -441,24 +442,23 @@ def work(args: argparse.Namespace) -> int:
     batches = tuple(args.batch) or DEFAULT_BATCHES
     if references.is_reference(arm_name):
         _reference_rows(
-            args,
-            leg,
-            references.get(arm_name),
-            batches,
-            method,
-            peaks,
-            machine_record,
+            leg=leg,
+            ref=references.get(arm_name),
+            selected=selected,
+            batches=batches,
+            method=method,
+            peaks=peaks,
+            machine_record=machine_record,
         )
     else:
         _frx_rows(
-            args,
-            leg,
-            arms.Arm(arm_name),
-            specs,
-            batches,
-            method,
-            peaks,
-            machine_record,
+            leg=leg,
+            arm=arms.Arm(arm_name),
+            specs=specs,
+            batches=batches,
+            method=method,
+            peaks=peaks,
+            machine_record=machine_record,
         )
     return 0
 

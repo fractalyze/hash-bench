@@ -74,10 +74,11 @@ reference_shim(
     copts = BASE_COPTS,
     linkopts = OPENMP,
     note = (
-        "One fetched EVP_MD per process and one EVP_MD_CTX per thread. A " +
-        "one-shot EVP_Digest per message refetches the algorithm from the " +
-        "provider on every hash, which at this message length measures " +
-        "OpenSSL's dispatch rather than its SHA-256."
+        "Not the EVP interface, which reaches the same assembly core through " +
+        "a provider: its per-digest algorithm refcounts and provider context " +
+        "are contended, and an EVP shim across 24 threads measured slower " +
+        "than the same work on one thread at every batch. The row is meant " +
+        "to be OpenSSL's SHA-256, not OpenSSL's dispatch machinery."
     ),
     revision = "openssl-4.0.1",
     source = "https://github.com/openssl/openssl",
@@ -85,7 +86,7 @@ reference_shim(
         ":parallel",
         "@openssl//:crypto",
     ],
-    implementation = "libcrypto EVP SHA-256, whose x86-64 core branches to the SHA-NI path on CPUID",
+    implementation = "libcrypto's one-shot SHA256(), whose x86-64 core branches to the SHA-NI path on CPUID",
 )
 
 # Plonky3 selects its packed field on `target_feature` rather than at run time,

@@ -21,6 +21,19 @@ load("@bazel_skylib//rules:write_file.bzl", "write_file")
 load("@rules_cc//cc:defs.bzl", "cc_binary")
 load("@rules_rust//rust:defs.bzl", "rust_shared_library")
 
+def _applied_once(flags):
+    """`flags` with repeats dropped, in first-use order.
+
+    A shim's compile and link flags are recorded as one list because they are
+    one fact about the binary, and `-fopenmp` legitimately appears in both. A
+    row that listed it twice would read as a build that said it twice.
+    """
+    applied = []
+    for flag in flags:
+        if flag not in applied:
+            applied.append(flag)
+    return applied
+
 def _bundle(
         name,
         library_target,
@@ -35,16 +48,17 @@ def _bundle(
     `library_target` builds it and `library_file` is what it lands as — the two
     differ for the Rust rule, which derives its own `lib<target>.so`.
     """
+    provenance = "%s.provenance.json" % name
     write_file(
         name = "%s_provenance" % name,
-        out = "%s.provenance.json" % name,
+        out = provenance,
         content = [json.encode({
             "reference": name,
             "library": library_file,
             "revision": revision,
             "source": source,
             "implementation": implementation,
-            "flags": flags,
+            "flags": _applied_once(flags),
             "note": note,
         })],
     )
@@ -52,7 +66,7 @@ def _bundle(
         name = name,
         srcs = [
             ":" + library_target,
-            "%s.provenance.json" % name,
+            provenance,
         ],
         visibility = ["//visibility:public"],
     )
@@ -125,8 +139,9 @@ def rust_reference_shim(
       edition: the Rust edition the shim is written against.
       note: a caveat a reader of the row needs, or None.
     """
+    shim = "%s_shim" % name
     rust_shared_library(
-        name = "%s_shim" % name,
+        name = shim,
         srcs = srcs,
         edition = edition,
         rustc_flags = rustc_flags,
@@ -134,8 +149,8 @@ def rust_reference_shim(
     )
     _bundle(
         name = name,
-        library_target = "%s_shim" % name,
-        library_file = "lib%s_shim.so" % name,
+        library_target = shim,
+        library_file = "lib%s.so" % shim,
         flags = rustc_flags,
         revision = revision,
         source = source,

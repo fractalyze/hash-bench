@@ -95,8 +95,15 @@ class DriverTest(absltest.TestCase):
         self.assertIsNone(row["reference"])
 
     def test_an_unknown_arm_names_the_ones_that_exist(self) -> None:
-        with self.assertRaises(AssertionError):
+        # The arm vocabulary spans two tables, so a typo has to be answered
+        # with the whole list rather than with a bare failure — asserting the
+        # exit status alone would pass for any way the run could break.
+        with self.assertRaises(AssertionError) as caught:
             _sweep("--hash", "sha256", "--batch", "4", "--arm", "not-an-arm")
+        message = str(caught.exception)
+        self.assertIn("no such arm: not-an-arm", message)
+        for arm in sweep.all_arms():
+            self.assertIn(arm, message)
 
     def test_a_row_carries_the_revisions_that_produced_it(self) -> None:
         (row,) = _sweep("--hash", "sha256", "--batch", "4", "--arm", "routed")
