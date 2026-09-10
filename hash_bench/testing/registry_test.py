@@ -75,7 +75,7 @@ class CallTest(parameterized.TestCase):
         self.assertEqual(call.hashes, batch)
         # The row's traffic claim is the arrays its call actually reads and
         # writes, so it is checkable against them rather than against a model.
-        expected = registry._nbytes(call.x) + registry._nbytes(out)
+        expected = registry.nbytes(call.x) + registry.nbytes(out)
         self.assertEqual(call.bytes_moved, expected)
 
     def test_a_byte_hash_digests_the_message_length_its_row_declares(self) -> None:

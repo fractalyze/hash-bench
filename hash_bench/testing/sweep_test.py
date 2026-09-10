@@ -15,7 +15,7 @@ import sys
 
 from absl.testing import absltest, parameterized
 
-from hash_bench import arms, registry, results, sweep
+from hash_bench import arms, references, registry, results, sweep
 
 # The shortest settings that still produce a row: one warmup, one rep, and a rep
 # target low enough that calibration stops at a handful of calls.
@@ -47,12 +47,53 @@ def _sweep(*extra: str) -> list[dict]:
 
 class DriverTest(absltest.TestCase):
     def test_a_run_emits_one_row_per_hash_batch_and_arm(self) -> None:
+        # Every hash-frx arm, plus every reference that implements this hash —
+        # a reference covers what its codebase covers, so the expected arm set
+        # is read off the tables rather than written down.
+        expected_arms = [a.value for a in arms.Arm] + [
+            name
+            for name in references.names()
+            if references.get(name).covers("sha256")
+        ]
         rows = _sweep("--hash", "sha256", "--batch", "4", "--batch", "8")
-        self.assertLen(rows, 2 * len(arms.Arm))
+        self.assertLen(rows, 2 * len(expected_arms))
         self.assertCountEqual(
             {(r["batch"], r["arm_requested"]) for r in rows},
-            {(b, a.value) for b in (4, 8) for a in arms.Arm},
+            {(b, a) for b in (4, 8) for a in expected_arms},
         )
+
+    def test_a_reference_produces_no_row_for_a_hash_it_does_not_implement(
+        self,
+    ) -> None:
+        # One sweep runs every arm over one hash list, so a reference is
+        # routinely handed a hash it does not implement; the table simply has no
+        # row there rather than the run failing.
+        rows = _sweep("--hash", "sha256", "--batch", "4", "--arm", "xkcp")
+        self.assertEmpty(rows)
+
+    def test_a_reference_row_carries_the_revision_and_flags_that_built_it(
+        self,
+    ) -> None:
+        # A reference number names no implementation without them, and the row
+        # is the unit that gets quoted.
+        (row,) = _sweep("--hash", "sha256", "--batch", "4", "--arm", "openssl")
+        reference = row["reference"]
+        self.assertEqual(reference["reference"], "openssl")
+        self.assertNotEmpty(reference["revision"])
+        self.assertNotEmpty(reference["copts"])
+        # No run-time compile, and null rather than zero so it does not read as
+        # a compile that cost nothing.
+        self.assertIsNone(row["compile_ns"])
+        # The kernel is the evidence the arm was read from, as on any row.
+        self.assertEqual(row["kernels"], ["hash_bench_openssl_sha256"])
+
+    def test_a_hash_frx_row_carries_no_reference_block(self) -> None:
+        (row,) = _sweep("--hash", "sha256", "--batch", "4", "--arm", "routed")
+        self.assertIsNone(row["reference"])
+
+    def test_an_unknown_arm_names_the_ones_that_exist(self) -> None:
+        with self.assertRaises(AssertionError):
+            _sweep("--hash", "sha256", "--batch", "4", "--arm", "not-an-arm")
 
     def test_a_row_carries_the_revisions_that_produced_it(self) -> None:
         (row,) = _sweep("--hash", "sha256", "--batch", "4", "--arm", "routed")
@@ -105,14 +146,15 @@ class CeilingTest(absltest.TestCase):
                 spec=spec,
                 batch=2,
                 leg_name="cpu",
-                arm=arms.Arm.ROUTED,
+                arm=arms.Arm.ROUTED.value,
                 call=call,
                 compile_ns=1,
                 measurement=timing.Measurement(1.0, 1.0, 0.0, timing.Method()),
-                observed=arms.Lowering.DEDICATED,
+                observed=arms.Lowering.DEDICATED.arm_name,
                 callees=("poseidon2",),
                 peaks=empty,
                 machine_record={},
+                observation="a probe",
             )
 
 

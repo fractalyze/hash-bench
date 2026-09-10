@@ -1,0 +1,89 @@
+# The CPU reference implementations, each compiled from the revision
+# `MODULE.bazel` pins and each recording the flags it was compiled with.
+#
+# The flags are not incidental. "SOTA on CPU" is a claim about the best these
+# codebases do on this machine, and every one of them reaches that only through
+# an instruction set the compiler has to be told about (or, for OpenSSL, through
+# a runtime dispatch that has to find the assembly linked in). A reference built
+# at defaults would be a slower program wearing the same name, so the flag set
+# rides into the row beside the revision.
+
+load("@rules_cc//cc:defs.bzl", "cc_library")
+load(":defs.bzl", "reference_shim")
+
+# Every shim parallelises its batch with OpenMP, so the reference reaches every
+# core on the `cpu` leg the way hash-frx's row reaches them through the XLA
+# thread pool. `backends.LEGS` already sets `OMP_NUM_THREADS=1` on the one-core
+# leg, so the two legs need no per-reference handling.
+OPENMP = ["-fopenmp"]
+
+BASE_COPTS = [
+    "-O3",
+    "-fno-plt",
+] + OPENMP
+
+# The rule every shim's batch loop follows, so the threshold is stated once
+# rather than per reference.
+cc_library(
+    name = "parallel",
+    hdrs = ["parallel.h"],
+)
+
+reference_shim(
+    name = "xkcp",
+    srcs = ["xkcp_shim.c"],
+    copts = BASE_COPTS,
+    linkopts = OPENMP,
+    note = (
+        "The single-state permutation, which is the layout the harness's row " +
+        "carries. XKCP's KeccakP-1600-times8/AVX512 permutes eight states at " +
+        "once and is faster per permutation, but only over its own interleaved " +
+        "state; a row measuring it would be measuring a different array shape."
+    ),
+    revision = "eb5244d6b95fb1c434b211bac293093e18aa8fd1",
+    source = "https://github.com/XKCP/XKCP",
+    deps = [
+        ":parallel",
+        "@xkcp//:keccak",
+    ],
+    implementation = "lib/low/KeccakP-1600/AVX512 — hand-written AVX-512 assembly, single state",
+)
+
+reference_shim(
+    name = "blake3",
+    srcs = ["blake3_shim.c"],
+    copts = BASE_COPTS,
+    linkopts = OPENMP,
+    note = (
+        "The upstream dispatches on CPUID rather than on a compile flag, so " +
+        "the copts here do not name the kernel that ran; the row's " +
+        "runtime_dispatch carries what the loaded library reports."
+    ),
+    revision = "1.8.2",
+    source = "https://github.com/BLAKE3-team/BLAKE3",
+    deps = [
+        ":parallel",
+        "@blake3//c:blake3",
+    ],
+    implementation = "c/ — the reference C implementation, SIMD kernel chosen by CPUID at run time",
+)
+
+reference_shim(
+    name = "openssl",
+    srcs = ["openssl_shim.c"],
+    copts = BASE_COPTS,
+    linkopts = OPENMP,
+    note = (
+        "One fetched EVP_MD per process and one EVP_MD_CTX per thread. A " +
+        "one-shot EVP_Digest per message refetches the algorithm from the " +
+        "provider on every hash, which at this message length measures " +
+        "OpenSSL's dispatch rather than its SHA-256."
+    ),
+    revision = "openssl-4.0.1",
+    source = "https://github.com/openssl/openssl",
+    deps = [
+        ":parallel",
+        "@openssl//:crypto",
+    ],
+    implementation = "libcrypto EVP SHA-256, whose x86-64 core branches to the SHA-NI path on CPUID",
+)

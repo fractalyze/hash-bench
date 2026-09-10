@@ -55,7 +55,7 @@ class Call:
     ops_dtype: Any | None
 
 
-def _nbytes(arr: Any) -> int:
+def nbytes(arr: Any) -> int:
     return int(arr.size) * int(arr.dtype.itemsize)
 
 
@@ -109,7 +109,7 @@ class HashSpec:
     message_bytes: int = 0
     op_model: Callable[[Any], OpModel] | None = None
 
-    def _arith_dtype(self, primitive: Any) -> Any:
+    def arith_dtype(self, primitive: Any) -> Any:
         """The dtype this row's `OpModel` counts operations in.
 
         A permutation's is its state dtype. A byte hash has no single one — its
@@ -132,7 +132,7 @@ class HashSpec:
         if self.op_model is None:
             return None
         primitive = self.build()
-        return self._arith_dtype(primitive), self.op_model(primitive).unit
+        return self.arith_dtype(primitive), self.op_model(primitive).unit
 
     def call(self, batch: int) -> Call:
         """Build the primitive and shape one batched call over it."""
@@ -161,9 +161,9 @@ class HashSpec:
             fn=fn,
             x=x,
             hashes=batch,
-            bytes_moved=_nbytes(x) + _nbytes(out),
+            bytes_moved=nbytes(x) + nbytes(out),
             ops=ops,
-            ops_dtype=self._arith_dtype(unit) if ops else None,
+            ops_dtype=self.arith_dtype(unit) if ops else None,
         )
 
 

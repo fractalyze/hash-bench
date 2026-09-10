@@ -18,6 +18,13 @@ three separately-noisy ones.
 
 Narrow it with `--hash`, `--batch`, `--backend` and `--arm`; each is repeatable
 and defaults to everything available.
+
+`--arm` spans two vocabularies. The three hash-frx lowerings (`arms.py`) are
+requested through `XLA_FLAGS`; the external CPU references (`references.py`) are
+pinned implementations reached through `ctypes`, and are arms of the same sweep
+so that a reference row and a hash-frx row are one measurement apart rather than
+one harness apart. A reference is offered on the CPU legs only and produces rows
+only for the hashes its codebase implements.
 """
 
 from __future__ import annotations
@@ -31,9 +38,24 @@ import sys
 import time
 from typing import Any, TextIO
 
-from hash_bench import arms, backends, machine, registry, results, roofline, timing
+from hash_bench import (
+    arms,
+    backends,
+    machine,
+    references,
+    registry,
+    results,
+    roofline,
+    timing,
+)
 
 DEFAULT_BATCHES = (1, 256, 4096, 65536)
+
+
+def all_arms() -> tuple[str, ...]:
+    """Every arm name a run may ask for: the hash-frx lowerings then the
+    references, which is also the order a default sweep runs them in."""
+    return tuple(a.value for a in arms.Arm) + references.names()
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -65,7 +87,7 @@ def _parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         metavar="ARM",
-        help=f"repeatable; default every arm ({', '.join(a.value for a in arms.Arm)})",
+        help=f"repeatable; default every arm ({', '.join(all_arms())})",
     )
     p.add_argument(
         "--out",
@@ -86,12 +108,19 @@ def _parser() -> argparse.ArgumentParser:
     return p
 
 
-def _worker_env(leg: backends.Leg, arm: arms.Arm) -> dict[str, str]:
+def _worker_env(leg: backends.Leg, arm: str) -> dict[str, str]:
     """The environment one (leg, arm) needs. `XLA_FLAGS` is appended to rather
-    than replaced, so a caller's flags survive into every worker."""
+    than replaced, so a caller's flags survive into every worker.
+
+    A reference adds no `XLA_FLAGS` of its own — it does not lower through the
+    plugin — but it takes the leg's environment in full, because
+    `OMP_NUM_THREADS` is how the one-core leg bounds a reference's own thread
+    pool the way the affinity mask bounds the backend's.
+    """
     env = dict(os.environ)
     env["FRX_PLATFORMS"] = leg.frx_platforms
-    flags = [env.get("XLA_FLAGS", ""), *leg.xla_flags, *arm.xla_flags]
+    arm_flags = () if references.is_reference(arm) else arms.Arm(arm).xla_flags
+    flags = [env.get("XLA_FLAGS", ""), *leg.xla_flags, *arm_flags]
     env["XLA_FLAGS"] = " ".join(f for f in flags if f).strip()
     env.update(leg.env)
     # The worker re-enters this module by name, so it needs this checkout on the
@@ -164,16 +193,36 @@ def _probe_peaks(args: argparse.Namespace, leg: backends.Leg) -> str:
     one measurement rather than by three of their own."""
     argv = _worker_argv(args, leg.name, arms.Arm.ROUTED.value) + ["--probe-peaks"]
     out = subprocess.run(
-        argv, env=_worker_env(leg, arms.Arm.ROUTED), stdout=subprocess.PIPE, text=True
+        argv,
+        env=_worker_env(leg, arms.Arm.ROUTED.value),
+        stdout=subprocess.PIPE,
+        text=True,
     )
     if out.returncode != 0:
         raise SystemExit(f"[{leg.name}] roofline probe failed")
     return out.stdout.strip()
 
 
+def _offered(arm: str, leg_name: str) -> bool:
+    """Whether this leg offers this arm.
+
+    Only references narrow: they are the CPU frontier, and a GPU reference is a
+    different set of codebases and a different pin. A hash-frx arm is offered on
+    every leg and, where the pin cannot reach it, the row says which arm ran
+    instead — that substitution is the harness's subject, so it is never
+    filtered out here.
+    """
+    return not references.is_reference(arm) or leg_name in references.CPU_LEGS
+
+
 def orchestrate(args: argparse.Namespace) -> int:
     legs = args.backend or backends.available()
-    requested_arms = [arms.Arm(a) for a in (args.arm or [a.value for a in arms.Arm])]
+    requested_arms = args.arm or list(all_arms())
+    unknown = [a for a in requested_arms if a not in all_arms()]
+    if unknown:
+        raise SystemExit(
+            f"no such arm: {', '.join(unknown)}; have {', '.join(all_arms())}"
+        )
     rows: list[dict[str, Any]] = []
     if args.out:
         os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
@@ -183,14 +232,16 @@ def orchestrate(args: argparse.Namespace) -> int:
             leg = backends.get(leg_name)
             peaks = _probe_peaks(args, leg)
             for arm in requested_arms:
+                if not _offered(arm, leg_name):
+                    continue
                 worker_rows, status = _run_worker(
-                    _worker_argv(args, leg_name, arm.value, peaks),
+                    _worker_argv(args, leg_name, arm, peaks),
                     _worker_env(leg, arm),
                     out,
                 )
                 rows += worker_rows
                 if status != 0:
-                    sys.stderr.write(f"[{leg_name}/{arm.value}] worker failed\n")
+                    sys.stderr.write(f"[{leg_name}/{arm}] worker failed\n")
                     return status
     finally:
         if out is not None:
@@ -205,15 +256,24 @@ def _row(
     spec: registry.HashSpec,
     batch: int,
     leg_name: str,
-    arm: arms.Arm,
+    arm: str,
     call: registry.Call,
-    compile_ns: int,
+    compile_ns: int | None,
     measurement: timing.Measurement,
-    observed: arms.Lowering,
+    observed: str,
     callees: tuple[str, ...],
     peaks: roofline.Peaks,
     machine_record: dict[str, Any],
+    observation: str,
+    reference: dict[str, Any] | None = None,
 ) -> results.Row:
+    """One row, from whichever arm produced it.
+
+    Shared by the hash-frx arms and the references on purpose: traffic, the op
+    model, the roofline fractions and the statistics all have to be computed the
+    same way on both sides, or the comparison the table exists for is between
+    two harnesses rather than between two implementations.
+    """
     seconds = measurement.ns_per_call * 1e-9
     hashes_per_s = call.hashes / seconds
     bytes_per_s = call.bytes_moved / seconds
@@ -242,8 +302,8 @@ def _row(
         hash=spec.name,
         batch=batch,
         backend=leg_name,
-        arm_requested=arm.value,
-        arm_observed=observed.arm_name,
+        arm_requested=arm,
+        arm_observed=observed,
         kernels=callees,
         compile_ns=compile_ns,
         ns_per_hash=measurement.ns_per_call / call.hashes,
@@ -257,15 +317,99 @@ def _row(
         ops_unit=ops_unit,
         ops_note=ops_note,
         roofline=roofline.fractions(bytes_per_s, ops_per_s, peaks.memory, arith),
-        method=dict(
-            dataclasses.asdict(measurement.method),
-            observation=(
-                "the arm and compile_ns were read from a second lowering of the "
-                "same computation; the timed calls go through the jit cache"
-            ),
-        ),
+        method=dict(dataclasses.asdict(measurement.method), observation=observation),
         machine=machine_record,
+        reference=reference,
     )
+
+
+_FRX_OBSERVATION = (
+    "the arm and compile_ns were read from a second lowering of the same "
+    "computation; the timed calls go through the jit cache"
+)
+
+_REFERENCE_OBSERVATION = (
+    "the arm is the pinned implementation named in `reference`, and the kernel "
+    "is the symbol resolved out of its shared object; there is no compile step "
+    "at run time, so compile_ns is null"
+)
+
+
+def _frx_rows(
+    args: argparse.Namespace,
+    leg: backends.Leg,
+    arm: arms.Arm,
+    specs: list[registry.HashSpec],
+    batches: tuple[int, ...],
+    method: timing.Method,
+    peaks: roofline.Peaks,
+    machine_record: dict[str, Any],
+) -> None:
+    """The rows one hash-frx lowering produces on this leg."""
+    for spec in specs:
+        for batch in batches:
+            call = spec.call(batch)
+            started = time.perf_counter_ns()
+            compiled = call.fn.lower(call.x).compile()
+            compile_ns = time.perf_counter_ns() - started
+            observed, callees = arms.observe(compiled.as_text())
+            row = _row(
+                spec=spec,
+                batch=batch,
+                leg_name=leg.name,
+                arm=arm.value,
+                call=call,
+                compile_ns=compile_ns,
+                measurement=timing.measure(call.fn, call.x, method),
+                observed=observed.arm_name,
+                callees=callees,
+                peaks=peaks,
+                machine_record=machine_record,
+                observation=_FRX_OBSERVATION,
+            )
+            results.write(row, sys.stdout)
+
+
+def _reference_rows(
+    args: argparse.Namespace,
+    leg: backends.Leg,
+    ref: references.Reference,
+    batches: tuple[int, ...],
+    method: timing.Method,
+    peaks: roofline.Peaks,
+    machine_record: dict[str, Any],
+) -> None:
+    """The rows one pinned reference produces on this leg.
+
+    `arm_observed` equals `arm_requested` here, and unlike on a hash-frx arm
+    that is not an assumption: the shared object either resolves the symbol or
+    the worker fails, so there is no silent substitution for the row to have to
+    report. What the row does have to carry is the provenance, which is the
+    reference's equivalent of the revisions a hash-frx row reads off the wheels.
+    """
+    provenance = ref.provenance.to_json()
+    method = method.synchronous()
+    for spec in references.rows(ref, tuple(args.hash)):
+        for batch in batches:
+            call = ref.call(spec, batch)
+            row = _row(
+                spec=spec,
+                batch=batch,
+                leg_name=leg.name,
+                arm=ref.name,
+                call=call,
+                compile_ns=None,
+                measurement=timing.measure(
+                    call.fn, call.x, method, block=timing.block_none
+                ),
+                observed=ref.name,
+                callees=(ref.symbol(spec.name),),
+                peaks=peaks,
+                machine_record=machine_record,
+                observation=_REFERENCE_OBSERVATION,
+                reference=provenance,
+            )
+            results.write(row, sys.stdout)
 
 
 def work(args: argparse.Namespace) -> int:
@@ -277,7 +421,7 @@ def work(args: argparse.Namespace) -> int:
             "the plugin loads"
         )
     leg = backends.get(args.backend[0])
-    arm = arms.Arm(args.arm[0])
+    arm_name = args.arm[0]
     if leg.one_core:
         backends.pin_to_one_core()
 
@@ -294,29 +438,28 @@ def work(args: argparse.Namespace) -> int:
         raise SystemExit("--worker needs --peaks; the orchestrator probes per leg")
     peaks = roofline.Peaks.from_json(json.loads(args.peaks))
     machine_record = machine.describe()
-    batches = args.batch or DEFAULT_BATCHES
-    for spec in specs:
-        for batch in batches:
-            call = spec.call(batch)
-            started = time.perf_counter_ns()
-            compiled = call.fn.lower(call.x).compile()
-            compile_ns = time.perf_counter_ns() - started
-            observed, callees = arms.observe(compiled.as_text())
-            measurement = timing.measure(call.fn, call.x, method)
-            row = _row(
-                spec=spec,
-                batch=batch,
-                leg_name=leg.name,
-                arm=arm,
-                call=call,
-                compile_ns=compile_ns,
-                measurement=measurement,
-                observed=observed,
-                callees=callees,
-                peaks=peaks,
-                machine_record=machine_record,
-            )
-            results.write(row, sys.stdout)
+    batches = tuple(args.batch) or DEFAULT_BATCHES
+    if references.is_reference(arm_name):
+        _reference_rows(
+            args,
+            leg,
+            references.get(arm_name),
+            batches,
+            method,
+            peaks,
+            machine_record,
+        )
+    else:
+        _frx_rows(
+            args,
+            leg,
+            arms.Arm(arm_name),
+            specs,
+            batches,
+            method,
+            peaks,
+            machine_record,
+        )
     return 0
 
 

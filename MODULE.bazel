@@ -18,12 +18,41 @@ module(
 )
 
 bazel_dep(name = "platforms", version = "1.0.0")
+bazel_dep(name = "bazel_skylib", version = "1.8.2")
+bazel_dep(name = "rules_cc", version = "0.2.17")
 bazel_dep(name = "rules_python", version = "1.5.1")
 bazel_dep(name = "hash_frx", version = "0.0.0")
 git_override(
     module_name = "hash_frx",
     commit = "7313e13079afbf585a232e22986d184f8f5e89eb",
     remote = "https://github.com/fractalyze/hash-frx.git",
+)
+
+# The CPU reference implementations. Each is a pinned external dependency at a
+# fixed revision rather than a vendored copy, because the revision is part of
+# what a measured row claims: a reference number is only comparable to another
+# run's if both name the same source. `hash_bench/reference/BUILD.bazel` records
+# the build flags each one is compiled with, which is the other half of that
+# claim.
+#
+# BLAKE3 and OpenSSL arrive through the Bazel Central Registry, which already
+# carries a native build of each. XKCP ships no Bazel build, so it is fetched at
+# a commit with the overlay in `third_party/`.
+bazel_dep(name = "blake3", version = "1.8.2.bcr.1")
+bazel_dep(name = "openssl", version = "4.0.1.bcr.0")
+
+http_archive = use_repo_rule(
+    "@bazel_tools//tools/build_defs/repo:http.bzl",
+    "http_archive",
+)
+
+# A commit, not a tag: XKCP publishes no releases.
+http_archive(
+    name = "xkcp",
+    build_file = "//third_party:xkcp.BUILD",
+    integrity = "sha256-zwDpBT22n2cNE3WzDfeHwe+Rvc+5uHC9+jeQ3+10ODY=",
+    strip_prefix = "XKCP-eb5244d6b95fb1c434b211bac293093e18aa8fd1",
+    urls = ["https://github.com/XKCP/XKCP/archive/eb5244d6b95fb1c434b211bac293093e18aa8fd1.tar.gz"],
 )
 
 python = use_extension("@rules_python//python/extensions:python.bzl", "python")

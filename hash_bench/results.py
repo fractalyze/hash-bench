@@ -16,7 +16,7 @@ import dataclasses
 import json
 from typing import Any, TextIO
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 @dataclasses.dataclass(frozen=True)
@@ -35,7 +35,11 @@ class Row:
     # inlines its whole round schedule and hands the backend the module the
     # emitter existed to avoid — so an arm that wins at run time while costing
     # more to compile is a different trade, not a free one.
-    compile_ns: int
+    #
+    # Null on a reference arm, which has no run-time compile: the flags that
+    # built it are in `reference.copts` and were paid at build time. Null rather
+    # than zero, because zero would read as a compile that cost nothing.
+    compile_ns: int | None
     ns_per_hash: float
     ns_per_hash_min: float
     spread: float
@@ -49,6 +53,12 @@ class Row:
     roofline: dict[str, Any]
     method: dict[str, Any]
     machine: dict[str, Any]
+    # The pinned external implementation this row measured — its revision, the
+    # upstream implementation selected, and the flags it was compiled with —
+    # or None on a hash-frx arm, whose revisions ride in `machine` instead. A
+    # reference number is not quotable without them, and the row is the unit
+    # that gets quoted.
+    reference: dict[str, Any] | None = None
 
     @property
     def as_requested(self) -> bool:
@@ -90,6 +100,12 @@ def _arm_cell(row: dict[str, Any]) -> str:
     return f"{row['arm_observed']} (<-{row['arm_requested']})"
 
 
+def _compile_cell(row: dict[str, Any]) -> str:
+    """Seconds, or a dash where the arm has nothing to compile at run time."""
+    compile_ns = row["compile_ns"]
+    return "-" if compile_ns is None else f"{compile_ns / 1e9:.2f}"
+
+
 def _roofline_cell(row: dict[str, Any]) -> str:
     rl = row["roofline"]
     bound = rl["bound"].split(" ")[0]
@@ -110,7 +126,7 @@ def table(rows: list[dict[str, Any]]) -> str:
             _arm_cell(row),
             f"{row['ns_per_hash']:.3f}",
             f"{row['bytes_per_s'] / 1e9:.2f}",
-            f"{row['compile_ns'] / 1e9:.2f}",
+            _compile_cell(row),
             _roofline_cell(row),
         )
         lines.append(
