@@ -77,7 +77,8 @@ between them is one measurement apart rather than one harness apart.
 |---|---|---|
 | `xkcp` | `keccak-f1600`, `sha3-256` | the Keccak team's own code, AVX-512 assembly |
 | `blake3` | `blake3` | the BLAKE3 team's reference C implementation |
-| `openssl` | `sha256` | libcrypto's EVP SHA-256, which branches to SHA-NI on CPUID |
+| `openssl` | `sha256` | libcrypto's SHA-256, which branches to SHA-NI on CPUID |
+| `plonky3` | `poseidon2-koalabear16` | Plonky3's own Poseidon2, on its AVX-512 packed field |
 
 Each is a pinned external dependency at a fixed revision rather than a vendored
 copy, and each row carries that revision, the upstream implementation the build

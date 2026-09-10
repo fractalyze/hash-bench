@@ -45,16 +45,19 @@ def _sweep(*extra: str) -> list[dict]:
     return [json.loads(line) for line in out.stdout.splitlines() if line.strip()]
 
 
+def _arms_over(hash_name: str) -> list[str]:
+    """Every arm a default sweep runs over one hash: all three hash-frx
+    lowerings, plus each reference that implements it. Read off the tables
+    rather than written down, because a reference covers what its codebase
+    covers."""
+    return [a.value for a in arms.Arm] + [
+        name for name in references.names() if references.get(name).covers(hash_name)
+    ]
+
+
 class DriverTest(absltest.TestCase):
     def test_a_run_emits_one_row_per_hash_batch_and_arm(self) -> None:
-        # Every hash-frx arm, plus every reference that implements this hash —
-        # a reference covers what its codebase covers, so the expected arm set
-        # is read off the tables rather than written down.
-        expected_arms = [a.value for a in arms.Arm] + [
-            name
-            for name in references.names()
-            if references.get(name).covers("sha256")
-        ]
+        expected_arms = _arms_over("sha256")
         rows = _sweep("--hash", "sha256", "--batch", "4", "--batch", "8")
         self.assertLen(rows, 2 * len(expected_arms))
         self.assertCountEqual(
@@ -80,7 +83,7 @@ class DriverTest(absltest.TestCase):
         reference = row["reference"]
         self.assertEqual(reference["reference"], "openssl")
         self.assertNotEmpty(reference["revision"])
-        self.assertNotEmpty(reference["copts"])
+        self.assertNotEmpty(reference["flags"])
         # No run-time compile, and null rather than zero so it does not read as
         # a compile that cost nothing.
         self.assertIsNone(row["compile_ns"])
@@ -118,9 +121,36 @@ class DriverTest(absltest.TestCase):
         # A share and the total it is a share of have to come from one
         # measurement, or the leg's arms stop being comparable to each other.
         rows = _sweep("--hash", "poseidon2-koalabear16", "--batch", "4")
-        self.assertLen(rows, len(arms.Arm))
+        self.assertLen(rows, len(_arms_over("poseidon2-koalabear16")))
         self.assertLen({r["roofline"]["peak_bytes_per_s"] for r in rows}, 1)
         self.assertLen({r["roofline"]["peak_ops_per_s"] for r in rows}, 1)
+
+    def test_a_reference_is_held_to_the_same_ceilings_as_the_hash_frx_arms(
+        self,
+    ) -> None:
+        # The reference rows share the leg's Peaks rather than measuring their
+        # own. A denominator per arm would make a reference's roofline fraction
+        # and a hash-frx row's fractions of two different numbers, which is the
+        # one thing a reader wants them not to be.
+        rows = _sweep("--hash", "poseidon2-koalabear16", "--batch", "4")
+        by_arm = {r["arm_requested"]: r for r in rows}
+        self.assertIn("plonky3", by_arm)
+        self.assertEqual(
+            by_arm["plonky3"]["roofline"]["peak_ops_per_s"],
+            by_arm["routed"]["roofline"]["peak_ops_per_s"],
+        )
+
+    def test_a_reference_row_declares_the_same_op_model_as_its_hash(self) -> None:
+        # A permutation's multiply count is a property of the permutation, not
+        # of who implements it, so both arms are held to the same arithmetic
+        # ceiling in the same unit — which is what makes the two fractions
+        # comparable at all.
+        rows = _sweep("--hash", "poseidon2-koalabear16", "--batch", "4")
+        by_arm = {r["arm_requested"]: r for r in rows}
+        self.assertEqual(
+            by_arm["plonky3"]["ops_per_hash"], by_arm["routed"]["ops_per_hash"]
+        )
+        self.assertEqual(by_arm["plonky3"]["ops_unit"], "field_mul")
 
     def test_the_worker_runs_under_the_arm_it_was_given(self) -> None:
         (row,) = _sweep("--hash", "sha256", "--batch", "4", "--arm", "declined")

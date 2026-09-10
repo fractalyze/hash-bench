@@ -49,7 +49,7 @@ class ProvenanceTest(parameterized.TestCase):
         self.assertNotEmpty(provenance.revision)
         self.assertNotEmpty(provenance.source)
         self.assertNotEmpty(provenance.implementation)
-        self.assertNotEmpty(provenance.copts)
+        self.assertNotEmpty(provenance.flags)
 
     @parameterized.named_parameters(*_pairs())
     def test_covered_hash_is_in_the_registry(self, name: str, hash_name: str) -> None:

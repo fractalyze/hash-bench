@@ -176,7 +176,12 @@ def describe() -> dict[str, Any]:
         "devices": devices(),
         "env": {
             name: os.environ.get(name)
-            for name in ("FRX_PLATFORMS", "XLA_FLAGS", "OMP_NUM_THREADS")
+            for name in (
+                "FRX_PLATFORMS",
+                "XLA_FLAGS",
+                "OMP_NUM_THREADS",
+                "RAYON_NUM_THREADS",
+            )
         },
         "revisions": revisions(),
     }

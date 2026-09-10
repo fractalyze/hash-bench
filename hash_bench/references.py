@@ -79,11 +79,16 @@ class Provenance:
     """
 
     reference: str
+    # The shared object this describes. Named rather than derived, so a
+    # reference can be built by whichever rule suits its language.
+    library: str
     revision: str
     source: str
     implementation: str
-    copts: tuple[str, ...]
-    linkopts: tuple[str, ...]
+    # Every flag the shim was built with. On the Rust reference these also
+    # decide which backend the upstream compiles in, its packed field being a
+    # `target_feature` gate.
+    flags: tuple[str, ...]
     note: str | None
     # What the loaded library says about itself at run time, where it offers an
     # answer. Several of these upstreams select their kernel from CPUID rather
@@ -94,8 +99,7 @@ class Provenance:
 
     def to_json(self) -> dict[str, Any]:
         d = dataclasses.asdict(self)
-        d["copts"] = list(self.copts)
-        d["linkopts"] = list(self.linkopts)
+        d["flags"] = list(self.flags)
         return d
 
 
@@ -131,15 +135,19 @@ class Reference:
         return hash_name in self._by_hash
 
     @functools.cached_property
+    def _payload(self) -> dict[str, Any]:
+        return json.loads(_artifact(f"{self.name}.provenance.json").read_text())
+
+    @functools.cached_property
     def provenance(self) -> Provenance:
-        payload = json.loads(_artifact(f"{self.name}.provenance.json").read_text())
+        payload = self._payload
         return Provenance(
             reference=payload["reference"],
+            library=payload["library"],
             revision=payload["revision"],
             source=payload["source"],
             implementation=payload["implementation"],
-            copts=tuple(payload["copts"]),
-            linkopts=tuple(payload["linkopts"]),
+            flags=tuple(payload["flags"]),
             note=payload["note"],
             runtime_dispatch=self._runtime_dispatch(),
         )
@@ -166,7 +174,7 @@ class Reference:
         `RTLD_GLOBAL` is not asked for: each shim links its upstream statically,
         so two references loaded into one worker cannot collide over a symbol.
         """
-        return ctypes.CDLL(str(_artifact(f"lib{self.name}.so")))
+        return ctypes.CDLL(str(_artifact(self._payload["library"])))
 
     def symbol(self, hash_name: str) -> str:
         """The entry point a row for `hash_name` calls — the row's `kernels`,
@@ -287,6 +295,15 @@ _REFERENCES: tuple[Reference, ...] = (
     Reference(
         name="openssl",
         entries=(_byte_hash("sha256", "hash_bench_openssl_sha256"),),
+    ),
+    Reference(
+        name="plonky3",
+        entries=(
+            _permutation(
+                "poseidon2-koalabear16",
+                "hash_bench_plonky3_poseidon2_koalabear16",
+            ),
+        ),
     ),
 )
 
