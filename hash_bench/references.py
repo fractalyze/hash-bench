@@ -106,12 +106,11 @@ class Provenance:
     # name what ran.
     patches: tuple[str, ...]
     note: str | None
-    # What the loaded library says about itself at run time, where it offers an
-    # answer. Several CPU upstreams select their kernel from CPUID rather than
-    # from a compile flag, so the flags alone do not say what ran; a CUDA shim
-    # reports the nvcc and architectures that built its kernel and the device
-    # and driver it found. Asked of the process about to produce the rows. None
-    # where the upstream's selection is entirely a build-time choice.
+    # What the loaded library reports about itself, queried in the worker that
+    # produces the rows: several CPU upstreams pick their kernel from CPUID, and
+    # a CUDA shim's nvcc and architectures come from the kernel's own
+    # translation unit, so neither is knowable from the build flags. None when
+    # the upstream's kernel is fixed at build time.
     runtime_dispatch: str | None = None
 
     def to_json(self) -> dict[str, Any]:

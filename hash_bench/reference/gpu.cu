@@ -29,10 +29,12 @@ const char *hash_bench_gpu_describe(const char *build) {
   int runtime = 0;
   cudaDriverGetVersion(&driver);
   cudaRuntimeGetVersion(&runtime);
+  // The CUDA API version the driver supports, not the kernel module's own
+  // version, which the row's `machine.gpu_driver` carries.
   snprintf(described, sizeof described,
-           "%s; %s (sm_%d%d), driver %d.%d, runtime %d.%d", build, prop.name,
-           prop.major, prop.minor, driver / 1000, driver % 1000 / 10,
-           runtime / 1000, runtime % 1000 / 10);
+           "%s; %s (sm_%d%d), CUDA driver API %d.%d, runtime %d.%d", build,
+           prop.name, prop.major, prop.minor, driver / 1000,
+           driver % 1000 / 10, runtime / 1000, runtime % 1000 / 10);
   return described;
 }
 

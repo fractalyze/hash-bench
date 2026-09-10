@@ -117,7 +117,8 @@ reference         null on a hash-frx arm. On a reference arm, the pinned
                                       alone do not say what ran; a CUDA shim
                                       reports the nvcc and architectures its
                                       kernel was compiled with and the device,
-                                      driver and runtime it found. Null where
+                                      CUDA driver API and runtime it found.
+                                      Null where
                                       the selection is entirely a build-time
                                       choice
                     note              a caveat a reader of the row needs

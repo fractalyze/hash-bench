@@ -27,9 +27,10 @@
 // default stream.
 cudaError_t hash_bench_gpu_stream(cudaStream_t *stream);
 
-// "<build>; <device> (sm_XY), driver X.Y, runtime X.Y". `build` is the caller's
-// HASH_BENCH_NVCC_BUILD, expanded in the kernel's own translation unit so that
-// it names the compiler and the architectures that built that kernel.
+// "<build>; <device> (sm_XY), CUDA driver API X.Y, runtime X.Y". `build` is
+// the caller's HASH_BENCH_NVCC_BUILD, expanded in the kernel's own translation
+// unit so that it names the compiler and the architectures that built that
+// kernel.
 const char *hash_bench_gpu_describe(const char *build);
 
 #define HASH_BENCH_STR_(x) #x
