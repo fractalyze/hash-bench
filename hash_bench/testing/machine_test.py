@@ -58,6 +58,34 @@ class GitShaTest(absltest.TestCase):
         self.assertIsNone(machine._git_sha(Path(self.create_tempdir().full_path)))
 
 
+class DriverTest(absltest.TestCase):
+    def test_the_version_is_read_off_either_module_banner(self) -> None:
+        # The open and the proprietary kernel modules word the banner
+        # differently, and both put an `x86_64` token ahead of the version.
+        for banner, expected in (
+            (
+                "NVRM version: NVIDIA UNIX Open Kernel Module for x86_64  "
+                "580.126.09  Release Build  (dvs-builder@host)  Wed Jan  7 2026\n",
+                "580.126.09",
+            ),
+            (
+                "NVRM version: NVIDIA UNIX x86_64 Kernel Module  535.104.05  "
+                "Sat Aug 19 01:15:15 UTC 2023\n",
+                "535.104.05",
+            ),
+        ):
+            self.assertEqual(machine._parse_nvidia_driver(banner), expected)
+
+    def test_an_unrecognised_banner_reports_no_driver(self) -> None:
+        # A version guessed from the wrong token would be a row naming a driver
+        # it did not run under.
+        self.assertIsNone(machine._parse_nvidia_driver("not a driver banner\n"))
+
+    def test_a_host_without_the_module_reports_no_driver(self) -> None:
+        missing = Path(self.create_tempdir().full_path) / "version"
+        self.assertIsNone(machine._nvidia_driver(missing))
+
+
 class PinTest(absltest.TestCase):
     def test_the_pinned_hash_frx_commit_is_readable(self) -> None:
         # A `git_override`-fetched module has no `.git`, so this file is the

@@ -110,6 +110,29 @@ def _pinned_hash_frx_commit() -> str | None:
     return None
 
 
+# The version token of the kernel module's banner, which reads `NVIDIA UNIX
+# [Open Kernel Module for] x86_64 [Kernel Module]  <version>  ...` depending on
+# which of the two module flavours is loaded.
+_NVIDIA_DRIVER = re.compile(r"NVRM version:.*?\s(\d+(?:\.\d+)+)\s")
+
+
+def _parse_nvidia_driver(banner: str) -> str | None:
+    match = _NVIDIA_DRIVER.search(banner)
+    return match.group(1) if match else None
+
+
+def _nvidia_driver(banner: Path = Path("/proc/driver/nvidia/version")) -> str | None:
+    """The NVIDIA kernel driver's version, or None on a host without one.
+
+    Read off the kernel module rather than asked of the CUDA runtime, so writing
+    the record needs no device initialised in the process that writes it.
+    """
+    try:
+        return _parse_nvidia_driver(banner.read_text())
+    except OSError:
+        return None
+
+
 def _cpu_model() -> str:
     try:
         for line in Path("/proc/cpuinfo").read_text().splitlines():
@@ -174,6 +197,11 @@ def describe() -> dict[str, Any]:
         "cpu_affinity": affinity,
         "backend": frx.default_backend(),
         "devices": devices(),
+        # A GPU number belongs to the driver as well as the device — it ships
+        # the JIT and the scheduling — and the device list names only the model.
+        # Not in `revisions`, whose every entry a comparison has to match: a
+        # driver update says nothing about a CPU row.
+        "gpu_driver": _nvidia_driver(),
         "env": {
             name: os.environ.get(name)
             for name in (

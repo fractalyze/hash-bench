@@ -130,7 +130,8 @@ without it the number names no implementation and is comparable to nothing.
 method            warmup, reps, iters, the statistic, how calls were dispatched,
                   and the timer — enough to re-run the same measurement
 machine           host, OS, CPU model, core count, the affinity mask in effect,
-                  the backend and its devices, the environment knobs
+                  the backend and its devices, the NVIDIA driver (gpu_driver,
+                  null on a host without one), the environment knobs
 machine.revisions every version that decides what the number means
 ```
 
@@ -148,7 +149,8 @@ null and `hash-frx-pin` is the answer.
 ## What a comparison needs
 
 Two rows are comparable when they agree on `hash`, `batch`, `backend`,
-`machine.host` and every entry of `machine.revisions`. That is the whole
+`machine.host` and every entry of `machine.revisions` — and, on the `gpu`
+backend, `machine.gpu_driver`. That is the whole
 comparison contract: everything else in the row is either the measurement or the
 evidence behind it.
 
